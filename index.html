@@ -30,15 +30,21 @@ body{margin:0;background:#fff;color:var(--ink);
 .app{min-height:100%;display:flex;flex-direction:column}
 
 /* nav */
-nav{position:sticky;top:0;z-index:20;background:#fff;padding:calc(8px + var(--safe-t)) 14px 8px;
-  display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--line)}
-nav .back{width:30px;height:30px;border-radius:50%;background:var(--tonal);border:none;flex:none;
+nav{position:sticky;top:0;z-index:20;background:#121212;padding:calc(9px + var(--safe-t)) 13px 10px;
+  display:flex;align-items:center;gap:9px}
+nav .back{width:28px;height:28px;border-radius:50%;background:rgba(255,255,255,.14);border:none;flex:none;
   display:flex;align-items:center;justify-content:center;cursor:pointer}
-nav .back s{display:block;width:8px;height:8px;border-left:2px solid var(--ink);border-bottom:2px solid var(--ink);
+nav .back s{display:block;width:8px;height:8px;border-left:2px solid #fff;border-bottom:2px solid #fff;
   transform:rotate(45deg);margin-left:3px;text-decoration:none}
-nav .ttl{font-size:14px;font-weight:800;letter-spacing:-0.02em;min-width:0;
+nav .wm{display:flex;align-items:center;gap:1px;color:#fff;font-weight:800;font-size:15px;
+  letter-spacing:-0.055em;flex:none}
+nav .wm i{width:9px;height:9px;border-radius:50%;border:2.4px solid #fff;display:block;position:relative;top:.5px}
+nav .sep{width:1px;height:15px;background:rgba(255,255,255,.26);flex:none}
+nav .ttl{font-size:13.5px;font-weight:600;color:rgba(255,255,255,.86);min-width:0;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-nav .gear{margin-left:auto;background:none;border:none;font-size:17px;cursor:pointer;padding:4px;color:var(--ink2)}
+nav .concept{flex:none;margin-left:auto;font-size:9px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;
+  color:#FFD34D;border:1px solid rgba(255,211,77,.5);border-radius:999px;padding:3px 7px}
+nav .gear{background:none;border:none;font-size:17px;cursor:pointer;padding:4px;color:rgba(255,255,255,.75);flex:none}
 
 main{flex:1;padding:14px 16px calc(20px + var(--safe-b));display:flex;flex-direction:column;gap:12px;max-width:640px;width:100%;margin:0 auto}
 .eyebrow{font-size:10px;font-weight:800;letter-spacing:.09em;text-transform:uppercase;color:var(--ink3)}
@@ -156,7 +162,10 @@ a{color:var(--blue)}
 <div class="app">
   <nav>
     <button class="back hidden" id="back" aria-label="Back"><s></s></button>
+    <span class="wm" aria-label="Discogs">Disc<i></i>gs</span>
+    <span class="sep"></span>
     <span class="ttl" id="title">Runout</span>
+    <span class="concept">Concept</span>
     <button class="gear" id="gear" aria-label="Settings">&#9881;</button>
   </nav>
   <main id="main"></main>
@@ -192,14 +201,21 @@ function dg(path) {                              // serialised, ~3/sec, well ins
 }
 
 /* ---------------- Claude ---------------- */
+function endpoint() {
+  const url = (LS.getItem('proxyUrl') || '').trim();
+  return url ? { url, code: (LS.getItem('proxyCode') || '').trim() } : null;
+}
 async function ask(content) {
+  const ep = endpoint();
   const key = (LS.getItem('anthKey') || '').trim();
-  if (!key) throw new Error('Add your Anthropic API key in settings (top right).');
-  const r = await fetch('https://api.anthropic.com/v1/messages', {
+  if (!ep && !key) throw new Error('This needs either a shared endpoint or your own Anthropic API key — both are under the cog, top right.');
+  const headers = ep
+    ? { 'content-type': 'application/json', ...(ep.code ? { 'x-app-password': ep.code } : {}) }
+    : { 'content-type': 'application/json', 'x-api-key': key,
+        'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' };
+  const r = await fetch(ep ? ep.url : 'https://api.anthropic.com/v1/messages', {
     method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-api-key': key,
-               'anthropic-version': '2023-06-01',
-               'anthropic-dangerous-direct-browser-access': 'true' },
+    headers,
     body: JSON.stringify({ model: 'claude-opus-5', max_tokens: 16000,
                            thinking: { type: 'adaptive' },
                            messages: [{ role: 'user', content }] })
@@ -830,6 +846,7 @@ function render() {
 
   /* ---- search ---- */
   if (S.screen === 'search') {
+    add(`<div class="banner info" style="font-weight:600">An internal concept, not a Discogs product. Built to test one thing: whether a phone can tell one pressing from another.</div>`);
     add(`<h1>Point it at a record.</h1>`);
     add(`<p class="note">Photograph the sleeve and the app works out the album, then every pressing of it, then which one you are holding. The <b>back</b> of the sleeve gives it most to go on.</p>`);
     const live = el(`<button class="primary" style="padding:20px 16px;font-size:17px">&#128247;&nbsp; Start scanning</button>`);
@@ -989,7 +1006,7 @@ function render() {
       <input type="file" accept="image/*" capture="environment" multiple></label>`);
     lab.querySelector('input').onchange = e => addShots(e.target, 'shots', 3); add(lab);
     if (!(LS.getItem('anthKey') || '').trim()) {
-      add(`<div class="banner info"><b>Reading a photo needs an Anthropic API key</b> — add one under the cog, top right. Everything up to this point works without one.</div>`);
+      add(`<div class="banner info"><b>Reading a photo needs credit behind it</b> — a shared endpoint or your own key, both under the cog. Everything up to this point works without either.</div>`);
     }
     const ex = el(`<button class="ghost">See a worked example instead</button>`);
     ex.onclick = loadExample; add(ex);
@@ -1111,9 +1128,20 @@ function render() {
   /* ---- settings ---- */
   if (S.screen === 'settings') {
     add(`<h1>Settings</h1>`);
-    const k = el(`<div class="card"><div class="eyebrow">Anthropic API key</div>
+    const hasEp = !!(LS.getItem('proxyUrl') || '').trim();
+    add(`<div class="banner ${hasEp ? 'info' : 'warn'}">${hasEp
+      ? 'Using a shared endpoint — no personal key needed on this device.'
+      : 'Reading photographs needs credit behind it. Use <b>either</b> a shared endpoint (then nobody needs their own key) <b>or</b> your own API key.'}</div>`);
+    const ep = el(`<div class="card"><div class="eyebrow">Shared endpoint — the easy way</div>
+      <input id="pu" type="url" inputmode="url" placeholder="https://…workers.dev" value="${esc(LS.getItem('proxyUrl') || '')}" autocomplete="off">
+      <input id="pc" type="password" placeholder="Access code" value="${esc(LS.getItem('proxyCode') || '')}" autocomplete="off" style="margin-top:8px">
+      <div class="s">Set up once, holds the key server-side. Anyone with the link and the code can then use the app without a key of their own. <code>worker.js</code> in the project is the whole thing — about thirty lines.</div></div>`);
+    add(ep);
+    $('#pu').onchange = e => { LS.setItem('proxyUrl', e.target.value.trim()); render(); };
+    $('#pc').onchange = e => LS.setItem('proxyCode', e.target.value.trim());
+    const k = el(`<div class="card"><div class="eyebrow">Or your own Anthropic key</div>
       <input id="key" type="password" placeholder="sk-ant-…" value="${esc(LS.getItem('anthKey') || '')}" autocomplete="off">
-      <div class="s">Kept in this browser only and sent straight to api.anthropic.com. Fine for a personal trial; not how a shipped app would do it.</div></div>`);
+      <div class="s">Kept in this browser only and sent straight to api.anthropic.com. Fine for your own trial; not something to share.</div></div>`);
     add(k);
     $('#key').onchange = e => LS.setItem('anthKey', e.target.value.trim());
     const t = rows();
@@ -1129,7 +1157,7 @@ function render() {
       const url = URL.createObjectURL(new Blob([head+'\n'+body], {type:'text/csv'}));
       const a = document.createElement('a'); a.href = url; a.download = 'runout-trial.csv'; a.click();
     };
-    $('#wipe').onclick = () => { LS.removeItem('rows'); render(); };
+    $('#wipe').onclick = () => { ['rows','proxyUrl','proxyCode','anthKey'].forEach(k => LS.removeItem(k)); render(); };
     add(`<details><summary>What this demo does and does not do</summary><div>
       <div class="s"><b>Real:</b> every version, catalogue number, runout, price and cover comes live from the Discogs API. The identification and the condition read are real model calls on your photographs.</div>
       <div class="s"><b>Not real:</b> it cannot create the listing for you — that needs your Discogs login — so it hands off to the normal Discogs form with the right release already chosen.</div>

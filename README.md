@@ -15,22 +15,31 @@ http://<your-computer's-LAN-IP>:8000
 To install it to a phone home screen you need HTTPS, so publish the `app/`
 folder to any static host (GitHub Pages, Cloudflare Pages, Netlify).
 
-## What it needs
+## Does it need an API key?
 
-An Anthropic API key, entered in Settings. It is kept in the browser's
-localStorage on the device and sent directly to api.anthropic.com. That is
-fine for a personal trial and is not how a shipped app would do it.
+For reading photographs, yes — something has to pay for that. Two ways:
 
-No Discogs token is required — search, versions, releases, identifiers,
-prices and cover art all come from the public API.
+- **A shared endpoint (nobody needs a key).** Deploy `worker.js` once to a
+  Cloudflare Worker with your `ANTHROPIC_API_KEY` and an `APP_PASSWORD`, then
+  put the worker URL and the code into the app's settings. The key stays
+  server-side and never reaches a browser. This is how you hand the app to
+  other people.
+- **Your own key**, pasted into settings, kept in that browser only.
+
+Everything else needs nothing: searching, every version of an album, the
+runouts recorded for each, prices, cover art, and the worked example all come
+from the public Discogs API with no token at all.
+
+## A note on the branding
+
+This is styled in Discogs' colours and marked **Concept** in the header,
+because it is an internal prototype and not a Discogs product.
 
 ## What it does
 
-1. Start scanning. The camera stays live and works through a checklist —
-   sleeve front, sleeve back, catalogue number, runout matrix — ticking each one
-   off as it gets what it needs and telling you what to change when it cannot.
-   Frames are graded for sharpness on the device, so a read is only spent on a
-   picture worth reading. A single photo, or typing the album name, are fallbacks.
+1. Photograph the sleeve. It reads the artist, title, catalogue number, barcode
+   and country of manufacture, then finds the album (a barcode goes straight to
+   the pressings that carry it). Typing the album name is still there as a fallback.
 2. Filter to a country and format; load the runouts recorded for each version
 3. Photograph the runout matrix (torch on, low angle, 2–3 frames)
 4. Rank the candidates, with a confidence and the margin over the runner-up
