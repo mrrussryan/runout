@@ -1,0 +1,716 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1">
+<meta name="theme-color" content="#0F1012">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Runout">
+<title>Runout</title>
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="apple-touch-icon" href="./icon-192.png">
+<link rel="icon" href="./icon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  --ink:#0F1012;--ink2:#6B6F76;--ink3:#9AA0A6;--line:#E8EAED;--tonal:#F3F4F5;--tonal2:#F7F8F9;
+  --brand:#007C0B;--brandbg:#F1F8F2;--blue:#2653D9;--bluebg:#F2F5FE;
+  --warn:#8A5A00;--warnbg:#FFF6E5;--bad:#B4402E;--badbg:#FCEEEB;
+  --r:12px;--rc:14px;
+  --safe-t:env(safe-area-inset-top,0px);--safe-b:env(safe-area-inset-bottom,0px);
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{height:100%}
+body{margin:0;background:#fff;color:var(--ink);
+  font-family:Manrope,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  font-size:15px;line-height:1.5;letter-spacing:-0.005em;-webkit-font-smoothing:antialiased;
+  overscroll-behavior-y:contain}
+.app{min-height:100%;display:flex;flex-direction:column}
+
+/* nav */
+nav{position:sticky;top:0;z-index:20;background:#fff;padding:calc(8px + var(--safe-t)) 14px 8px;
+  display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--line)}
+nav .back{width:30px;height:30px;border-radius:50%;background:var(--tonal);border:none;flex:none;
+  display:flex;align-items:center;justify-content:center;cursor:pointer}
+nav .back s{display:block;width:8px;height:8px;border-left:2px solid var(--ink);border-bottom:2px solid var(--ink);
+  transform:rotate(45deg);margin-left:3px;text-decoration:none}
+nav .ttl{font-size:14px;font-weight:800;letter-spacing:-0.02em;min-width:0;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+nav .gear{margin-left:auto;background:none;border:none;font-size:17px;cursor:pointer;padding:4px;color:var(--ink2)}
+
+main{flex:1;padding:14px 16px calc(20px + var(--safe-b));display:flex;flex-direction:column;gap:12px;max-width:640px;width:100%;margin:0 auto}
+.eyebrow{font-size:10px;font-weight:800;letter-spacing:.09em;text-transform:uppercase;color:var(--ink3)}
+h1{font-size:23px;font-weight:800;letter-spacing:-0.035em;line-height:1.12;margin:0}
+h2{font-size:16px;font-weight:800;letter-spacing:-0.025em;margin:0}
+p{margin:0}
+.note{font-size:12.5px;color:var(--ink2);line-height:1.5}
+.mono{font-family:"IBM Plex Mono",monospace;font-size:12px;letter-spacing:.02em;word-break:break-word}
+
+input,select,textarea{width:100%;font:inherit;font-size:16px;padding:13px 14px;border:1px solid var(--line);
+  border-radius:var(--r);background:#fff;color:var(--ink);outline:none;-webkit-appearance:none}
+input:focus,select:focus{border-color:var(--ink)}
+textarea{min-height:76px;resize:vertical;font-size:14px}
+button{font:inherit;font-weight:700;font-size:15px;border:none;border-radius:var(--r);
+  padding:14px 16px;background:var(--tonal);color:var(--ink);cursor:pointer;line-height:1.1}
+button.primary{background:var(--brand);color:#fff;box-shadow:0 2px 8px rgba(0,124,11,.25)}
+button.ghost{background:transparent;box-shadow:inset 0 0 0 1px var(--line);color:var(--ink2)}
+button:disabled{opacity:.45}
+.row{display:flex;gap:8px}.row>*{flex:1}
+.stack{display:flex;flex-direction:column;gap:10px}
+
+label.file{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;
+  background:var(--tonal2);border:1.5px dashed #D3D7DB;border-radius:var(--rc);padding:22px 16px;cursor:pointer}
+label.file b{font-size:15px}label.file span{font-size:12.5px;color:var(--ink2);text-align:center}
+label.file input{display:none}
+.shots{display:flex;gap:8px;flex-wrap:wrap}
+.shots figure{margin:0;position:relative}
+.shots img{width:74px;height:74px;object-fit:cover;border-radius:10px;border:1px solid var(--line);display:block}
+.shots button{position:absolute;top:-6px;right:-6px;width:22px;height:22px;padding:0;border-radius:50%;
+  background:var(--ink);color:#fff;font-size:12px;line-height:22px;box-shadow:none}
+
+.card{background:#fff;border-radius:var(--rc);padding:12px 14px;display:flex;flex-direction:column;gap:4px;
+  box-shadow:0 1px 2px rgba(16,18,20,.05),0 6px 16px -8px rgba(16,18,20,.14)}
+.card.tonal{background:var(--tonal2);box-shadow:none}
+.card.win{background:var(--brandbg);box-shadow:inset 0 0 0 1.5px var(--brand)}
+.card.pick{background:var(--bluebg);box-shadow:inset 0 0 0 1.5px var(--blue)}
+.card.mute{background:var(--tonal2);box-shadow:none;opacity:.6}
+.card .t{font-size:14px;font-weight:800;letter-spacing:-0.02em;display:flex;gap:8px;align-items:center}
+.card .s{font-size:12.5px;color:var(--ink2);line-height:1.45}
+.card .px{margin-left:auto;font-weight:800;white-space:nowrap}
+.tap{cursor:pointer}
+.tap:active{transform:scale(.995)}
+
+.pill{display:inline-flex;align-items:center;gap:5px;background:var(--tonal);border-radius:999px;
+  padding:5px 11px;font-size:12px;font-weight:700;white-space:nowrap}
+.pill.brand{background:#E8F3E9;color:#00650a}.pill.blue{background:var(--bluebg);color:var(--blue)}
+.pill.warn{background:var(--warnbg);color:var(--warn)}.pill.bad{background:var(--badbg);color:var(--bad)}
+.pills{display:flex;gap:6px;flex-wrap:wrap}
+
+.rel{display:flex;gap:12px;align-items:flex-start}
+.rel img{width:74px;height:74px;flex:none;border-radius:10px;object-fit:cover;background:var(--tonal);
+  box-shadow:0 1px 2px rgba(16,18,20,.08),0 8px 20px -10px rgba(16,18,20,.25)}
+.rel .m{min-width:0;display:flex;flex-direction:column;gap:3px}
+.rel .a{font-size:12.5px;font-weight:700;color:var(--blue)}
+.rel .b{font-size:15px;font-weight:800;letter-spacing:-0.025em;line-height:1.18}
+.rel .c{font-size:12px;color:var(--ink2)}
+
+.stats{display:flex;background:var(--tonal2);border-radius:var(--rc);padding:11px 4px}
+.stats div{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px}
+.stats .k{font-size:9.5px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;color:var(--ink3)}
+.stats .n{font-size:14px;font-weight:800;letter-spacing:-0.02em}
+
+.meter{height:6px;background:#F0F1F3;border-radius:999px;overflow:hidden}
+.meter i{display:block;height:100%;background:var(--brand);border-radius:999px;transition:width .5s ease}
+.kv{display:flex;justify-content:space-between;align-items:baseline;font-size:13px}
+.kv .k{color:var(--ink2);font-weight:600}.kv .n{font-weight:800;letter-spacing:-0.02em}
+
+.banner{border-radius:var(--r);padding:12px 14px;font-size:13px;font-weight:600;line-height:1.45}
+.banner.bad{background:var(--badbg);color:var(--bad)}
+.banner.warn{background:var(--warnbg);color:var(--warn)}
+.banner.info{background:var(--tonal2);color:var(--ink2)}
+.hidden{display:none!important}
+.spin{display:inline-block;width:14px;height:14px;border:2px solid rgba(0,0,0,.14);border-top-color:var(--ink);
+  border-radius:50%;animation:sp .7s linear infinite;vertical-align:-2px}
+@keyframes sp{to{transform:rotate(360deg)}}
+.busy{display:flex;align-items:center;gap:9px;font-size:13.5px;font-weight:600;color:var(--ink2)}
+details{border:1px solid var(--line);border-radius:var(--r)}
+summary{padding:12px 14px;font-size:13px;font-weight:700;color:var(--ink2);cursor:pointer}
+details>div{padding:0 14px 14px;display:flex;flex-direction:column;gap:10px}
+.sticky{position:sticky;bottom:0;background:linear-gradient(to top,#fff 68%,rgba(255,255,255,0));
+  padding:12px 0 calc(4px + var(--safe-b));margin-top:auto;display:flex;gap:8px}
+.sticky>*{flex:1}
+a{color:var(--blue)}
+</style>
+
+<div class="app">
+  <nav>
+    <button class="back hidden" id="back" aria-label="Back"><s></s></button>
+    <span class="ttl" id="title">Runout</span>
+    <button class="gear" id="gear" aria-label="Settings">&#9881;</button>
+  </nav>
+  <main id="main"></main>
+</div>
+
+<script>
+'use strict';
+const $ = s => document.querySelector(s);
+const LS = localStorage;
+const el = (h) => { const d = document.createElement('div'); d.innerHTML = h.trim(); return d.firstElementChild; };
+const esc = t => (t == null ? '' : String(t)).replace(/[&<>"]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
+
+const S = {                       // app state
+  screen: 'search', stack: [],
+  query: '', results: [], album: null,
+  versions: [], country: '', fmt: 'vinyl', cap: 14, candidates: [],
+  shots: [], match: null, asked: null, release: null,
+  condShots: [], condition: null, busy: ''
+};
+
+/* ---------------- Discogs (public, no token) ---------------- */
+let queue = Promise.resolve();
+function dg(path) {                              // serialised, ~3/sec, well inside 25/min
+  const run = async () => {
+    const r = await fetch('https://api.discogs.com' + path);
+    if (r.status === 429) throw new Error('Discogs is rate-limiting — wait a minute and retry.');
+    if (!r.ok) throw new Error('Discogs returned ' + r.status);
+    await new Promise(z => setTimeout(z, 320));
+    return r.json();
+  };
+  queue = queue.then(run, run);
+  return queue;
+}
+
+/* ---------------- Claude ---------------- */
+async function ask(content) {
+  const key = (LS.getItem('anthKey') || '').trim();
+  if (!key) throw new Error('Add your Anthropic API key in settings (top right).');
+  const r = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-api-key': key,
+               'anthropic-version': '2023-06-01',
+               'anthropic-dangerous-direct-browser-access': 'true' },
+    body: JSON.stringify({ model: 'claude-opus-5', max_tokens: 16000,
+                           thinking: { type: 'adaptive' },
+                           messages: [{ role: 'user', content }] })
+  });
+  const j = await r.json();
+  if (j.type === 'error') throw new Error(j.error.message);
+  const text = (j.content || []).filter(b => b.type === 'text').map(b => b.text).join('');
+  const m = text.match(/\{[\s\S]*\}/);
+  if (!m) throw new Error('Unexpected reply: ' + text.slice(0, 180));
+  return JSON.parse(m[0]);
+}
+const img = b => ({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: b } });
+
+/* ---------------- camera ---------------- */
+function shrink(file) {
+  return new Promise((res, rej) => {
+    const i = new Image(), rd = new FileReader();
+    rd.onerror = () => rej(new Error('Could not read that photo.'));
+    rd.onload = () => i.src = rd.result;
+    i.onload = () => {
+      const M = 1500, sc = Math.min(1, M / Math.max(i.width, i.height));
+      const c = document.createElement('canvas');
+      c.width = Math.round(i.width * sc); c.height = Math.round(i.height * sc);
+      c.getContext('2d').drawImage(i, 0, 0, c.width, c.height);
+      res(c.toDataURL('image/jpeg', 0.85).split(',')[1]);
+    };
+    rd.readAsDataURL(file);
+  });
+}
+async function addShots(input, bucket, max) {
+  for (const f of input.files) { if (S[bucket].length >= max) break; S[bucket].push(await shrink(f)); }
+  input.value = ''; render();
+}
+
+/* ---------------- nav ---------------- */
+function go(screen, keep) { if (!keep) S.stack.push(S.screen); S.screen = screen; S.busy=''; window.scrollTo(0,0); render(); }
+function back() { S.screen = S.stack.pop() || 'search'; S.busy=''; render(); }
+$('#back').onclick = back;
+$('#gear').onclick = () => go('settings');
+
+function fail(e) { S.busy = ''; S.error = (e && e.message) || String(e); render(); }
+function busy(t) { S.busy = t; S.error = ''; render(); }
+
+/* ---------------- tally ---------------- */
+const rows = () => JSON.parse(LS.getItem('rows') || '[]');
+function logResult(ok) {
+  const r = rows();
+  r.push({ when: new Date().toISOString(), release: S.release ? S.release.id : null,
+           catno: S.release ? S.release.catno : '', conf: S.match ? S.match.confidence : null,
+           asked: !!S.asked, correct: ok,
+           transcription: S.match ? S.match.transcription : '',
+           grade: S.condition ? S.condition.media_grade_range : '' });
+  LS.setItem('rows', JSON.stringify(r));
+  reset(); go('search', true);
+}
+function reset() {
+  Object.assign(S, { demo: false, shots: [], match: null, asked: null, release: null,
+                     condShots: [], condition: null, candidates: [], versions: [],
+                     album: null, country: '', error: '' });
+  S.stack = [];
+}
+</script>
+
+<script>
+'use strict';
+/* ================= actions ================= */
+
+async function doSearch(q) {
+  if (!q.trim()) return;
+  busy('Searching Discogs…');
+  try {
+    const j = await dg('/database/search?type=master&per_page=12&q=' + encodeURIComponent(q.trim()));
+    S.results = (j.results || []).map(r => ({ id: r.id, title: r.title, year: r.year, thumb: r.thumb, country: r.country }));
+    S.busy = '';
+    if (!S.results.length) S.error = 'Nothing found. Try the artist and album title.';
+    render();
+  } catch (e) { fail(e); }
+}
+
+async function pickAlbum(a) {
+  S.album = a; S.versions = []; S.country = ''; S.candidates = [];
+  go('narrow');
+  busy('Loading every version…');
+  try {
+    let page = 1, pages = 1;
+    while (page <= pages && page <= 3) {
+      const v = await dg('/masters/' + a.id + '/versions?per_page=100&page=' + page);
+      pages = v.pagination.pages; S.versions = S.versions.concat(v.versions || []); page++;
+    }
+    S.busy = ''; render();
+  } catch (e) { fail(e); }
+}
+
+const FMT = { vinyl: ['Vinyl'], disc: ['Vinyl', 'CD'], all: null };
+const owned = v => { try { return v.stats.community.in_collection | 0; } catch (e) { return 0; } };
+
+function shortlist() {
+  const want = FMT[S.fmt];
+  let l = S.versions.slice();
+  if (S.country) l = l.filter(v => v.country === S.country);
+  if (want) l = l.filter(v => (v.major_formats || []).some(f => want.includes(f)));
+  l.sort((a, b) => owned(b) - owned(a));
+  return l;
+}
+
+let loadToken = 0;
+async function loadRunouts() {
+  const me = ++loadToken;
+  const list = shortlist().slice(0, S.cap);
+  S.candidates = [];
+  if (!list.length) { S.error = 'No versions match that filter.'; return render(); }
+  busy('Reading the runouts on file… 0 of ' + list.length);
+  for (const v of list) {
+    if (me !== loadToken) return;
+    try {
+      const rel = await dg('/releases/' + v.id);
+      S.candidates.push({
+        id: v.id, catno: v.catno, format: v.format, country: v.country, year: v.released,
+        label: v.label, owned: owned(v), thumb: v.thumb,
+        lowest: rel.lowest_price, forSale: rel.num_for_sale,
+        have: rel.community && rel.community.have, want: rel.community && rel.community.want,
+        cover: (rel.images && rel.images[0] && (rel.images[0].uri150 || rel.images[0].uri)) || v.thumb,
+        runouts: (rel.identifiers || [])
+          .filter(i => /matrix|runout/i.test(i.type || ''))
+          .filter(i => !/label/i.test(i.description || ''))
+          .map(i => ({ v: i.value, d: i.description || '' }))
+      });
+    } catch (e) { /* skip a bad one rather than stall the run */ }
+    if (me !== loadToken) return;
+    S.busy = 'Reading the runouts on file… ' + S.candidates.length + ' of ' + list.length;
+    render();
+  }
+  if (me !== loadToken) return;
+  S.busy = '';
+  const withR = S.candidates.filter(c => c.runouts.length).length;
+  if (withR === 0) S.error = 'None of these has a runout recorded, so there is nothing to match a photo against. This is the 56% gap — you can still list it by hand, and a scan would be a genuine contribution.';
+  else if (withR === 1) S.error = 'Only one of these has a runout on file, so a photo cannot separate them.';
+  render();
+}
+
+/* ---- identify ---- */
+function candidateList(list) {
+  return list.map((c, i) =>
+    '[' + (i + 1) + '] release ' + c.id + ' — ' + (c.catno || 'no cat#') + ' · ' +
+    [c.format, c.country, c.year].filter(Boolean).join(' · ') +
+    (c.owned ? ' · ' + c.owned.toLocaleString() + ' copies owned' : '') +
+    '\n      runouts on file: ' + c.runouts.map(r => '"' + r.v + '"' + (r.d ? ' (' + r.d + ')' : '')).join(' | ')
+  ).join('\n');
+}
+const RULES =
+`Rules that matter:
+- A release with more recorded variants is only better documented, not more likely. Judge by fit, never by how many strings a candidate has.
+- "Copies owned" is weak background only. It must never decide the answer.
+- Candidates often differ by ONE character (A-2 vs A-3; the digit 1 vs the letter I). If you cannot read the deciding character confidently, say so and lower your confidence. Being honestly unsure is the correct answer.`;
+
+async function identify() {
+  if (!S.shots.length) { S.error = 'Take at least one photo of the runout.'; return render(); }
+  const usable = S.candidates.filter(c => c.runouts.length);
+  busy('Reading the runout…');
+  try {
+    const prompt =
+`These photographs show the runout matrix (the code stamped into the dead wax) of one vinyl record. Below are the only releases it can be, with the runouts recorded for each.
+
+${candidateList(usable)}
+
+${RULES}
+
+Do this in order:
+1. Transcribe what you can actually read, character by character. Use ? for anything you cannot read.
+2. Rank the candidates. The answer must be one of the numbers above, or null for "none of these".
+3. Give a confidence 0-100 for the top choice.
+4. Say how far ahead it is over the runner-up, and whether that gap is a single character.
+5. Say which ONE extra photograph would most reduce the remaining doubt.
+
+Reply with JSON only:
+{"transcription":"...","top":<number|null>,"confidence":<0-100>,"runner_up":<number|null>,"margin":"...","deciding_character":"...","next_photo":"...","reasoning":"one or two sentences"}`;
+    const a = await ask([...S.shots.map(img), { type: 'text', text: prompt }]);
+    S.match = a; S.release = a.top ? usable[a.top - 1] : null;
+    S.busy = ''; go('result');
+  } catch (e) { fail(e); }
+}
+
+async function disambiguate() {
+  const usable = S.candidates.filter(c => c.runouts.length);
+  busy('Looking again with the extra photo…');
+  try {
+    const prompt =
+`Same record as before. The first photographs were of the runout matrix; the LAST photograph is the extra shot that was requested: "${S.match.next_photo}".
+
+Your earlier reading of the runout was: "${S.match.transcription}"
+
+Candidates:
+${candidateList(usable)}
+
+${RULES}
+
+Use the new photograph together with the runout reading. If the new photograph shows a feature (a label design, rim text, a second runout) that separates the candidates, say which and why.
+
+Reply with JSON only:
+{"transcription":"...","top":<number|null>,"confidence":<0-100>,"runner_up":<number|null>,"margin":"...","deciding_character":"...","what_the_extra_photo_showed":"...","next_photo":"...","reasoning":"..."}`;
+    const a = await ask([...S.shots.map(img), ...S.asked.map(img), { type: 'text', text: prompt }]);
+    S.match = a; S.release = a.top ? usable[a.top - 1] : null;
+    S.busy = ''; render();
+  } catch (e) { fail(e); }
+}
+
+/* ---- saved example: real releases from the API, a saved verdict ---- */
+async function loadExample() {
+  busy('Loading a saved example…');
+  try {
+    const ids = [1873013, 2655031];
+    const out = [];
+    for (const id of ids) {
+      const rel = await dg('/releases/' + id);
+      out.push({
+        id, catno: (rel.labels && rel.labels[0] && rel.labels[0].catno) || 'SHVL 804',
+        format: 'LP, Album' + (id === 1873013 ? ', Gatefold' : ', 2nd'),
+        country: rel.country, year: rel.year, label: (rel.labels && rel.labels[0] && rel.labels[0].name) || 'Harvest',
+        owned: rel.community && rel.community.have, lowest: rel.lowest_price, forSale: rel.num_for_sale,
+        have: rel.community && rel.community.have, want: rel.community && rel.community.want,
+        cover: (rel.images && rel.images[0] && (rel.images[0].uri150 || rel.images[0].uri)) || '',
+        runouts: (rel.identifiers || []).filter(i => /matrix|runout/i.test(i.type || ''))
+                   .filter(i => !/label/i.test(i.description || ''))
+                   .map(i => ({ v: i.value, d: i.description || '' }))
+      });
+    }
+    S.demo = true;
+    S.album = { id: 10362, title: 'Pink Floyd - The Dark Side Of The Moon', year: '1973' };
+    S.candidates = out;
+    S.release = out[0];
+    S.match = {
+      transcription: 'SHVL 804 A-2 G 1',
+      top: 1, confidence: 96, runner_up: 2,
+      margin: 'The stamped core SHVL 804 A- matches both. The deciding character is the stamper digit: 2 for the first pressing, 3 for the second issue. One character apart.',
+      deciding_character: 'the digit after A- (2 rather than 3)',
+      what_the_extra_photo_showed: 'A solid light-blue prism on the centre label. The second issue is documented with an empty outline prism, so this rules it out independently of the runout.',
+      next_photo: '',
+      reasoning: 'Runout and label agree on the 1973 first pressing. Either alone would have been a thin margin; together they are not.'
+    };
+    S.condition = {
+      defects: [
+        { what: 'scuff', where: 'side A, outer third', severity: 'light', audible_risk: 'possible' },
+        { what: 'hairline', where: 'side B, mid', severity: 'light', audible_risk: 'possible' },
+        { what: 'ring wear', where: 'sleeve front, lower right', severity: 'light', audible_risk: 'none' }
+      ],
+      sealed: false, media_grade_range: 'VG+ or VG', sleeve_grade_range: 'VG+', confidence: 70,
+      play_test_advised: true,
+      buyer_note: 'Two light scuffs to side A and one hairline to side B, visible under a light but not felt. Light ring wear to the sleeve front.',
+      caveat: 'Surface noise, crackle and skipping cannot be judged from photographs — only a play-test can settle those.'
+    };
+    S.busy = ''; S.stack = ['search']; go('result', true);
+  } catch (e) { fail(e); }
+}
+
+/* ---- condition ---- */
+async function grade() {
+  if (!S.condShots.length) { S.error = 'Take at least one photo of the record surface.'; return render(); }
+  busy('Looking for marks…');
+  try {
+    const prompt =
+`These photographs show a second-hand vinyl record and/or its sleeve, for condition grading on the Discogs (Goldmine) scale: Mint, Near Mint, VG+, VG, G+, G, Fair, Poor.
+
+Report only what you can actually see. Do not infer.
+
+Hard limits you must respect:
+- You cannot hear the record. The lower grades are defined by AUDIBLE damage — surface noise, crackle, skipping. Never claim to judge those.
+- Give a grade RANGE, not a single grade, whenever the marks put it near a boundary.
+- The seller makes the final call. Your output is a suggestion and a draft, never a verdict.
+
+Reply with JSON only:
+{"defects":[{"what":"scuff|scratch|hairline|mark|warp|ring wear|seam split|writing|sticker|other","where":"e.g. side A, outer third","severity":"light|moderate|heavy","audible_risk":"none|possible|likely"}],
+ "sealed":<true|false>,
+ "media_grade_range":"e.g. VG+ or VG",
+ "sleeve_grade_range":"e.g. VG+",
+ "confidence":<0-100>,
+ "play_test_advised":<true|false>,
+ "buyer_note":"one or two plain sentences a seller could paste into the listing",
+ "caveat":"what you could not judge from the photographs"}`;
+    S.condition = await ask([...S.condShots.map(img), { type: 'text', text: prompt }]);
+    S.busy = ''; go('summary');
+  } catch (e) { fail(e); }
+}
+</script>
+
+<script>
+'use strict';
+/* ================= render ================= */
+const TITLES = { search:'Runout', narrow:'Narrow it down', capture:'Photograph the runout',
+                 result:'Identify', condition:'Condition', summary:'Ready to list', settings:'Settings' };
+
+function relCard(c, cls) {
+  return `<div class="rel">
+    ${c.cover ? `<img src="${esc(c.cover)}" alt="" referrerpolicy="no-referrer">` : '<img alt="">'}
+    <div class="m">
+      <div class="a">${esc(S.album ? S.album.title.split(' - ')[0] : '')}</div>
+      <div class="b">${esc(c.catno || 'No catalogue number')}</div>
+      <div class="c">${esc([c.format, c.country, c.year].filter(Boolean).join(' · '))}</div>
+      ${c.owned ? `<div class="c">${c.owned.toLocaleString()} copies owned</div>` : ''}
+    </div></div>`;
+}
+
+function render() {
+  $('#title').textContent = TITLES[S.screen] || 'Runout';
+  $('#back').classList.toggle('hidden', !S.stack.length || S.screen === 'search');
+  const m = $('#main'); m.innerHTML = '';
+  const add = h => m.appendChild(typeof h === 'string' ? el(h) : h);
+
+  if (S.error) add(`<div class="banner bad">${esc(S.error)}</div>`);
+  if (S.demo && (S.screen === 'result' || S.screen === 'summary'))
+    add(`<div class="banner warn"><b>Worked example.</b> The releases, runouts and prices below are live from Discogs. The reading and the grading are a saved result from a real scan, not from a photo you took.</div>`);
+  if (S.busy) add(`<div class="busy"><span class="spin"></span>${esc(S.busy)}</div>`);
+
+  /* ---- search ---- */
+  if (S.screen === 'search') {
+    add(`<h1>Which record?</h1>`);
+    add(`<p class="note">Search for the album, then the app finds every pressing of it and works out which one you are holding.</p>`);
+    const f = el(`<form class="stack"><input id="q" type="search" placeholder="Artist and album title" value="${esc(S.query)}" enterkeyhint="search">
+      <button class="primary" type="submit">Search</button></form>`);
+    f.onsubmit = e => { e.preventDefault(); S.query = $('#q').value; doSearch(S.query); };
+    add(f);
+    if (S.results.length) {
+      add(`<div class="eyebrow" style="margin-top:6px">Results</div>`);
+      S.results.forEach(r => {
+        const c = el(`<div class="card tap"><div class="rel">
+          ${r.thumb ? `<img src="${esc(r.thumb)}" alt="" referrerpolicy="no-referrer">` : '<img alt="">'}
+          <div class="m"><div class="b">${esc(r.title)}</div>
+          <div class="c">${esc([r.year, r.country].filter(Boolean).join(' · '))}</div></div></div></div>`);
+        c.onclick = () => pickAlbum(r); add(c);
+      });
+    }
+    const dx = el(`<button class="ghost">See a worked example</button>`);
+    dx.onclick = loadExample; add(dx);
+    const t = rows();
+    if (t.length) {
+      const ok = t.filter(x => x.correct).length;
+      add(`<div class="stats" style="margin-top:8px">
+        <div><span class="k">Scanned</span><span class="n">${t.length}</span></div>
+        <div><span class="k">Right</span><span class="n">${ok}</span></div>
+        <div><span class="k">Top-1</span><span class="n">${Math.round(ok / t.length * 100)}%</span></div></div>`);
+    }
+  }
+
+  /* ---- narrow ---- */
+  if (S.screen === 'narrow') {
+    add(`<h1>${esc(S.album ? S.album.title : '')}</h1>`);
+    const total = S.versions.length, sl = shortlist().length;
+    add(`<div class="pills"><span class="pill">${total} versions</span>
+      <span class="pill ${sl < total ? 'brand' : ''}">${sl} after filtering</span></div>`);
+    const countries = [...new Set(S.versions.map(v => v.country).filter(Boolean))]
+      .map(c => [c, S.versions.filter(v => v.country === c).length]).sort((a, b) => b[1] - a[1]);
+    const ctl = el(`<div class="row">
+      <select id="ct"><option value="">Any country</option>${countries.map(([c, n]) =>
+        `<option value="${esc(c)}"${c === S.country ? ' selected' : ''}>${esc(c)} (${n})</option>`).join('')}</select>
+      <select id="fm">
+        <option value="vinyl"${S.fmt==='vinyl'?' selected':''}>Vinyl</option>
+        <option value="disc"${S.fmt==='disc'?' selected':''}>Vinyl + CD</option>
+        <option value="all"${S.fmt==='all'?' selected':''}>Any format</option></select></div>`);
+    add(ctl);
+    $('#ct').onchange = e => { S.country = e.target.value; render(); };
+    $('#fm').onchange = e => { S.fmt = e.target.value; render(); };
+    add(`<p class="note">Country is on the sleeve — &ldquo;Made in&hellip;&rdquo; — and it is the single most useful filter. ${sl > S.cap ? `Only the ${S.cap} most-owned will be checked.` : ''}</p>`);
+
+    if (!S.candidates.length) {
+      const b = el(`<button class="primary">Load the runouts on file</button>`);
+      b.onclick = loadRunouts; add(b);
+    } else {
+      const withR = S.candidates.filter(c => c.runouts.length).length;
+      add(`<div class="eyebrow" style="margin-top:4px">${withR} of ${S.candidates.length} have a runout recorded</div>`);
+      S.candidates.forEach(c => add(`<div class="card ${c.runouts.length ? '' : 'mute'}">
+        ${relCard(c)}
+        ${c.runouts.length
+          ? `<div class="mono" style="color:var(--ink2);margin-top:6px">${c.runouts.slice(0,2).map(r=>esc(r.v)).join('<br>')}${c.runouts.length>2?`<br>+ ${c.runouts.length-2} more`:''}</div>`
+          : `<div class="s" style="margin-top:6px">No runout on file</div>`}</div>`));
+      if (withR >= 2) {
+        const s = el(`<div class="sticky"><button class="primary">Photograph the runout</button></div>`);
+        s.firstElementChild.onclick = () => go('capture'); add(s);
+      }
+    }
+  }
+
+  /* ---- capture ---- */
+  if (S.screen === 'capture') {
+    add(`<h1>The runout matrix</h1>`);
+    add(`<p class="note">The code stamped between the last groove and the label. <b>Torch on</b>, hold the record at a low angle to the light and take two or three from different angles — the etching only shows when the light rakes across it.</p>`);
+    const lab = el(`<label class="file"><b>&#128247; Take a photo</b><span>up to 3 · more angles, better read</span>
+      <input type="file" accept="image/*" capture="environment" multiple></label>`);
+    lab.querySelector('input').onchange = e => addShots(e.target, 'shots', 3); add(lab);
+    if (!(LS.getItem('anthKey') || '').trim()) {
+      add(`<div class="banner info"><b>Reading a photo needs an Anthropic API key</b> — add one under the cog, top right. Everything up to this point works without one.</div>`);
+    }
+    const ex = el(`<button class="ghost">See a worked example instead</button>`);
+    ex.onclick = loadExample; add(ex);
+    if (S.shots.length) {
+      const g = el(`<div class="shots"></div>`);
+      S.shots.forEach((b, i) => {
+        const f = el(`<figure><img src="data:image/jpeg;base64,${b}" alt=""><button aria-label="Remove">&times;</button></figure>`);
+        f.querySelector('button').onclick = () => { S.shots.splice(i, 1); render(); }; g.appendChild(f);
+      });
+      add(g);
+      const s = el(`<div class="sticky"><button class="primary">Identify the pressing</button></div>`);
+      s.firstElementChild.onclick = identify; add(s);
+    }
+  }
+
+  /* ---- result ---- */
+  if (S.screen === 'result') {
+    const a = S.match || {}, conf = a.confidence | 0;
+    const tone = conf >= 85 ? 'brand' : conf >= 60 ? 'warn' : 'bad';
+    if (S.release) {
+      add(`<div class="card win">${relCard(S.release)}
+        <div class="pills" style="margin-top:8px"><span class="pill ${tone}">${conf}% confident</span>
+        ${S.asked ? '<span class="pill">2 rounds</span>' : ''}</div></div>`);
+    } else {
+      add(`<div class="card"><div class="t">No confident match</div>
+        <div class="s">Which is a legitimate answer — the record may not be in the database, or the photo may not be readable.</div></div>`);
+    }
+    add(`<div class="card tonal"><div class="eyebrow">Read from your photo</div>
+      <div class="mono" style="color:var(--ink);margin-top:4px">${esc(a.transcription || '—')}</div></div>`);
+    add(`<div class="card tonal">
+      <div class="s"><b>Margin</b> — ${esc(a.margin || '—')}</div>
+      ${a.deciding_character ? `<div class="s"><b>Turns on</b> — ${esc(a.deciding_character)}</div>` : ''}
+      ${a.what_the_extra_photo_showed ? `<div class="s"><b>The extra photo showed</b> — ${esc(a.what_the_extra_photo_showed)}</div>` : ''}
+      ${a.reasoning ? `<div class="s" style="margin-top:4px">${esc(a.reasoning)}</div>` : ''}</div>`);
+
+    if (conf < 85 && a.next_photo && !S.asked) {
+      add(`<div class="banner warn"><b>One more photo would settle it.</b><br>${esc(a.next_photo)}</div>`);
+      const lab = el(`<label class="file"><b>&#128247; Take that photo</b><span>${esc(a.next_photo)}</span>
+        <input type="file" accept="image/*" capture="environment"></label>`);
+      lab.querySelector('input').onchange = async e => {
+        S.asked = []; for (const f of e.target.files) S.asked.push(await shrink(f));
+        e.target.value = ''; disambiguate();
+      };
+      add(lab);
+    }
+    if (S.release) {
+      const s = el(`<div class="sticky"><button class="ghost">Wrong one</button><button class="primary">Yes — grade it</button></div>`);
+      s.children[0].onclick = () => { go('narrow'); };
+      s.children[1].onclick = () => go('condition'); add(s);
+    } else {
+      const s = el(`<div class="sticky"><button class="ghost">Back</button><button class="primary">Log as a miss</button></div>`);
+      s.children[0].onclick = back; s.children[1].onclick = () => logResult(false); add(s);
+    }
+  }
+
+  /* ---- condition ---- */
+  if (S.screen === 'condition') {
+    add(`<h1>How does it look?</h1>`);
+    add(`<p class="note">Photograph the playing surface under a low, raking light, and the sleeve if you want it graded too. The app spots the marks and drafts the note. <b>The grade stays yours.</b></p>`);
+    const lab = el(`<label class="file"><b>&#128247; Media and sleeve</b><span>up to 4 photos</span>
+      <input type="file" accept="image/*" capture="environment" multiple></label>`);
+    lab.querySelector('input').onchange = e => addShots(e.target, 'condShots', 4); add(lab);
+    if (S.condShots.length) {
+      const g = el(`<div class="shots"></div>`);
+      S.condShots.forEach((b, i) => {
+        const f = el(`<figure><img src="data:image/jpeg;base64,${b}" alt=""><button aria-label="Remove">&times;</button></figure>`);
+        f.querySelector('button').onclick = () => { S.condShots.splice(i, 1); render(); }; g.appendChild(f);
+      });
+      add(g);
+    }
+    const s = el(`<div class="sticky"><button class="ghost">Skip</button><button class="primary"${S.condShots.length?'':' disabled'}>Assess</button></div>`);
+    s.children[0].onclick = () => go('summary');
+    s.children[1].onclick = grade; add(s);
+  }
+
+  /* ---- summary ---- */
+  if (S.screen === 'summary') {
+    const c = S.condition, r = S.release;
+    if (r) add(`<div class="card win">${relCard(r)}</div>`);
+    if (r) add(`<div class="stats">
+      <div><span class="k">For sale</span><span class="n">${r.forSale != null ? r.forSale : '—'}</span></div>
+      <div><span class="k">From</span><span class="n">${r.lowest != null ? '£' + r.lowest : '—'}</span></div>
+      <div><span class="k">Have</span><span class="n">${r.have != null ? r.have.toLocaleString() : '—'}</span></div></div>`);
+    if (c) {
+      add(`<div class="card"><div class="eyebrow">Suggested — yours to change</div>
+        <div class="row" style="margin-top:6px">
+          <div><div class="s">Media</div><div class="t" style="font-size:19px">${esc(c.media_grade_range || '—')}</div></div>
+          <div><div class="s">Sleeve</div><div class="t" style="font-size:19px">${esc(c.sleeve_grade_range || '—')}</div></div>
+        </div>
+        ${c.play_test_advised ? `<div class="pill warn" style="align-self:flex-start;margin-top:8px">play-test to be sure</div>` : ''}
+        ${c.sealed ? `<div class="pill brand" style="align-self:flex-start;margin-top:8px">looks sealed</div>` : ''}</div>`);
+      if ((c.defects || []).length) add(`<div class="card tonal"><div class="eyebrow">What it saw</div>
+        ${c.defects.map(d => `<div class="s" style="margin-top:3px">• <b>${esc(d.what)}</b> — ${esc(d.where)}${d.severity ? ', ' + esc(d.severity) : ''}${d.audible_risk && d.audible_risk !== 'none' ? ` <span style="color:var(--warn)">(${esc(d.audible_risk)} to be audible)</span>` : ''}</div>`).join('')}</div>`);
+      add(`<div class="card"><div class="eyebrow">Draft note for the buyer</div>
+        <textarea id="note">${esc(c.buyer_note || '')}</textarea>
+        <div class="s">${esc(c.caveat || '')}</div></div>`);
+    }
+    const acts = el(`<div class="stack">
+      <button class="primary" id="sell">List it on Discogs &nearr;</button>
+      <div class="row"><button class="ghost" id="coll">Add to collection &nearr;</button><button class="ghost" id="copy">Copy details</button></div>
+    </div>`);
+    add(acts);
+    $('#sell').onclick = () => r && window.open('https://www.discogs.com/sell/post/' + r.id, '_blank', 'noopener');
+    $('#coll').onclick = () => r && window.open('https://www.discogs.com/release/' + r.id, '_blank', 'noopener');
+    $('#copy').onclick = () => {
+      const n = $('#note'); const txt = [
+        r ? 'Release: https://www.discogs.com/release/' + r.id : '',
+        r ? (r.catno || '') + ' · ' + [r.format, r.country, r.year].filter(Boolean).join(' · ') : '',
+        c ? 'Media: ' + (c.media_grade_range || '') + '   Sleeve: ' + (c.sleeve_grade_range || '') : '',
+        n ? n.value : ''].filter(Boolean).join('\n');
+      navigator.clipboard.writeText(txt).then(() => { S.error=''; S.busy='Copied.'; render(); setTimeout(()=>{S.busy='';render();},1200); });
+    };
+    if (r && !r.runouts.length) add(`<div class="banner info"><b>This release had no runout on file.</b> Your photo is exactly what is missing — worth submitting as a contribution.</div>`);
+    const s = el(`<div class="sticky"><button class="ghost">Wrong match</button><button class="primary">Right — next record</button></div>`);
+    s.children[0].onclick = () => logResult(false);
+    s.children[1].onclick = () => logResult(true); add(s);
+  }
+
+  /* ---- settings ---- */
+  if (S.screen === 'settings') {
+    add(`<h1>Settings</h1>`);
+    const k = el(`<div class="card"><div class="eyebrow">Anthropic API key</div>
+      <input id="key" type="password" placeholder="sk-ant-…" value="${esc(LS.getItem('anthKey') || '')}" autocomplete="off">
+      <div class="s">Kept in this browser only and sent straight to api.anthropic.com. Fine for a personal trial; not how a shipped app would do it.</div></div>`);
+    add(k);
+    $('#key').onchange = e => LS.setItem('anthKey', e.target.value.trim());
+    const t = rows();
+    add(`<div class="card tonal"><div class="eyebrow">Trial results</div>
+      <div class="s">${t.length} scans logged, ${t.filter(x=>x.correct).length} correct${t.length?` — ${Math.round(t.filter(x=>x.correct).length/t.length*100)}% top-1`:''}.</div></div>`);
+    const b = el(`<div class="row"><button class="ghost" id="csv">Export CSV</button><button class="ghost" id="wipe">Clear results</button></div>`);
+    add(b);
+    $('#csv').onclick = () => {
+      if (!t.length) { S.error = 'Nothing logged yet.'; return render(); }
+      const head = 'when,release,catno,confidence,asked_second_photo,correct,grade,transcription';
+      const body = t.map(x => [x.when, x.release, '"'+(x.catno||'')+'"', x.conf, x.asked, x.correct,
+        '"'+(x.grade||'')+'"', '"'+(x.transcription||'').replace(/"/g,'""')+'"'].join(',')).join('\n');
+      const url = URL.createObjectURL(new Blob([head+'\n'+body], {type:'text/csv'}));
+      const a = document.createElement('a'); a.href = url; a.download = 'runout-trial.csv'; a.click();
+    };
+    $('#wipe').onclick = () => { LS.removeItem('rows'); render(); };
+    add(`<details><summary>What this demo does and does not do</summary><div>
+      <div class="s"><b>Real:</b> every version, catalogue number, runout, price and cover comes live from the Discogs API. The identification and the condition read are real model calls on your photographs.</div>
+      <div class="s"><b>Not real:</b> it cannot create the listing for you — that needs your Discogs login — so it hands off to the normal Discogs form with the right release already chosen.</div>
+      <div class="s"><b>Deliberately conservative:</b> it suggests a grade range, never a single grade, and never claims to judge how a record sounds.</div></div></details>`);
+  }
+}
+
+/* ---- boot ---- */
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(()=>{}));
+}
+render();
+</script>
+</html>
