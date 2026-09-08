@@ -212,6 +212,17 @@ function endpoint() {
   const url = (LS.getItem('proxyUrl') || '').trim();
   return url ? { url, code: (LS.getItem('proxyCode') || '').trim() } : null;
 }
+// Only a heuristic, and deliberately a shy one: a false warning is worse than a
+// missing one. Known in-app webviews identify themselves in the user agent; on
+// iOS a webview that is not Safari also lacks the Safari token entirely.
+function inSafari() {
+  const ua = navigator.userAgent || '';
+  if (/FBAN|FBAV|Instagram|Line\/|Twitter|LinkedInApp|Snapchat|MicroMessenger|Slack/i.test(ua)) return false;
+  const iOS = /iPad|iPhone|iPod/.test(ua);
+  if (iOS && !/Safari/.test(ua)) return false;
+  return true;
+}
+
 function hasCreds() {
   return !!endpoint() || !!(LS.getItem('anthKey') || '').trim();
 }
@@ -468,8 +479,15 @@ async function startLive() {
       audio: false
     });
   } catch (e) {
-    S.error = 'The camera could not be opened (' + (e.name || 'unknown') + '). On iPhone this needs Safari and a tap to allow access. You can still photograph each part instead.';
-    S.screen = 'capture'; return render();
+    // Much the most common cause is an in-app browser (a link tapped inside Slack,
+    // Teams, Gmail): those webviews refuse camera access, and the user has no way
+    // of knowing that is what happened.
+    S.error = 'The live camera would not open (' + (e.name || 'unknown') + '). '
+      + 'If you opened this link from inside Slack, Teams or Gmail, that mini-browser blocks the camera \u2014 '
+      + 'press the \u22ef or share button and choose \u201cOpen in Safari\u201d, then try again. '
+      + 'Photographing each part still works here.';
+    S.camFailed = true;
+    S.screen = 'capture1'; return render();
   }
   L.track = L.stream.getVideoTracks()[0];
   // Optical or sensor zoom, where the phone offers it, beats cropping pixels we
@@ -636,6 +654,23 @@ function enhanceRunout(canvas) {
   ctx.putImageData(im, 0, 0);
   return { data: canvas.toDataURL('image/jpeg', 0.92).split(',')[1],
            score: energy / hp.length };
+}
+
+// The same treatment for a photograph the user took, rather than a live frame.
+// Every runout that comes in through the camera roll went unprocessed until now,
+// which is exactly the path most people actually use.
+async function enhanceShot(b64) {
+  const im = new Image();
+  await new Promise((res, rej) => {
+    im.onload = res; im.onerror = () => rej(new Error('could not decode that photo'));
+    setTimeout(() => rej(new Error('that photo took too long to decode')), 15000);
+    im.src = 'data:image/jpeg;base64,' + b64;
+  });
+  const sc = Math.min(1, 1600 / Math.max(im.width, im.height));
+  const c = document.createElement('canvas');
+  c.width = Math.round(im.width * sc); c.height = Math.round(im.height * sc);
+  c.getContext('2d').drawImage(im, 0, 0, c.width, c.height);
+  return enhanceRunout(c).data;
 }
 
 // Glare moves as the hand moves, so three frames a moment apart are not the same
@@ -1085,6 +1120,24 @@ const RULES =
 - "Copies owned" is weak background only. It must never decide the answer.
 - Candidates often differ by ONE character (A-2 vs A-3; the digit 1 vs the letter I). If you cannot read the deciding character confidently, say so and lower your confidence. Being honestly unsure is the correct answer.`;
 
+// Build the picture list for a runout read: each photograph processed to strip
+// the glare, plus the first one untouched so nothing is lost if the processing
+// was too aggressive.
+async function runoutContent(shots, prompt) {
+  const use = shots.slice(0, 3);
+  const out = [];
+  for (const sh of use) {
+    try { out.push(img(await enhanceShot(sh))); }
+    catch (e) { out.push(img(sh)); }        // fall back to the original
+  }
+  if (use.length) out.push(img(use[0]));
+  out.push({ type: 'text', text:
+`The pictures above are of the runout. All but the LAST have been processed on the phone to remove reflection: the broad glare has been subtracted and the fine detail stretched, so stamped or etched characters show as bright marks on grey. They will look harsh; that is expected and they are usually the clearer ones to read. The LAST picture is the untouched original, for context.
+
+` + prompt });
+  return out;
+}
+
 async function identify() {
   if (!S.shots.length) { S.error = 'Take at least one photo of the runout.'; return render(); }
   const usable = S.candidates.filter(c => c.runouts.length);
@@ -1106,7 +1159,7 @@ Do this in order:
 
 Reply with JSON only:
 {"transcription":"...","top":<number|null>,"confidence":<0-100>,"runner_up":<number|null>,"margin":"...","deciding_character":"...","next_photo":"...","reasoning":"one or two sentences"}`;
-    const a = await ask([...S.shots.map(img), { type: 'text', text: prompt }]);
+    const a = await ask(await runoutContent(S.shots, prompt));
     S.match = a; S.release = a.top ? usable[a.top - 1] : null;
     S.busy = ''; go('result');
   } catch (e) { fail(e); }
@@ -1130,7 +1183,7 @@ Use the new photograph together with the runout reading. If the new photograph s
 
 Reply with JSON only:
 {"transcription":"...","top":<number|null>,"confidence":<0-100>,"runner_up":<number|null>,"margin":"...","deciding_character":"...","what_the_extra_photo_showed":"...","next_photo":"...","reasoning":"..."}`;
-    const a = await ask([...S.shots.map(img), ...S.asked.map(img), { type: 'text', text: prompt }]);
+    const a = await ask(await runoutContent([...S.shots, ...S.asked], prompt));
     S.match = a; S.release = a.top ? usable[a.top - 1] : null;
     S.busy = ''; render();
   } catch (e) { fail(e); }
@@ -1245,6 +1298,9 @@ function render() {
   /* ---- search ---- */
   if (S.screen === 'search') {
     add(`<div class="banner info" style="font-weight:600">An internal concept, not a Discogs product. Built to test one thing: whether a phone can tell one pressing from another.</div>`);
+    if (!inSafari()) {
+      add(`<div class="banner warn"><b>Open this in Safari or Chrome.</b> It looks like this page is inside another app&rsquo;s mini-browser, and those block the live camera &mdash; you would end up photographing everything by hand. Tap the share or &ctdot; button and choose &ldquo;Open in Safari&rdquo;.</div>`);
+    }
     if (S.invited) {
       add(`<div class="banner info" style="color:var(--brand)">&check; <b>Ready to scan.</b> This link set the app up for you &mdash; reading is paid for centrally, so you need no key of your own. Requests go to <span class="mono">${esc(S.invited)}</span>.</div>`);
     }
@@ -1429,8 +1485,11 @@ function render() {
   /* ---- capture ---- */
   if (S.screen === 'capture') {
     add(`<h1>The runout matrix</h1>`);
-    add(`<p class="note">The code stamped between the last groove and the label. <b>Torch on</b>, hold the record at a low angle to the light and take two or three from different angles — the etching only shows when the light rakes across it.</p>`);
-    const lab = el(`<label class="file"><b>&#128247; Take a photo</b><span>up to 3 · more angles, better read</span>
+    add(`<p class="note">The code stamped between the last groove and the label. <b>Light from the side, not the torch</b> &mdash; a torch sits next to the lens and bounces straight back at you. Tilt the record until the etching glints.</p>`);
+    add(`<div class="banner warn"><b>Get the whole code in, not just the clearest part.</b><br>
+      The marks run round the disc and what separates two pressings is often a <i>separate group of characters</i> further along the arc &mdash; a trailing number, a stamper letter. A tight crop of the neatest bit is the single most common reason it cannot decide.<br><br>
+      <b>Take two:</b> one of the main stamp, then <b>turn the record a few inches</b> and take another of the next stretch of dead wax, even if it looks empty.</div>`);
+    const lab = el(`<label class="file"><b>&#128247; Take a photo</b><span>up to 3 &middot; different points around the arc</span>
       <input type="file" accept="image/*" capture="environment" multiple></label>`);
     lab.querySelector('input').onchange = e => addShots(e.target, 'shots', 3); add(lab);
     if (!(LS.getItem('anthKey') || '').trim()) {
