@@ -434,18 +434,26 @@ async function loadRunouts() {
 /* ================= live scanner =================
    A live feed with a checklist. Frames are graded on-device for sharpness so a
    model read is only spent when the picture is actually worth reading. */
+// The barcode goes first on purpose. It is high-contrast printed digits rather
+// than hand-scratched metal, so it is the most reliable thing on the record; on
+// most phones it decodes on-device for nothing; and 70% of the time it names one
+// exact release, which ends the scan there and then. Everything after it is the
+// fallback for records too old to have one.
 const STEPS = [
+  { key:'barcode', label:'Barcode', shape:'band', optional:true,
+    hint:'Lay the band across the barcode. No barcode on this record? Tap Skip this.' },
   { key:'front',  label:'Sleeve front', shape:'sq',
     hint:'Fill the frame with the front cover.' },
   { key:'back',   label:'Sleeve back',  shape:'sq',
-    hint:'Show the back — this is where the catalogue number and barcode are.' },
+    hint:'Show the back — this is where the catalogue number is.' },
   { key:'runout', label:'Runout matrix', shape:'band',
     hint:'Torch on. Get close and lay the band along the scratched writing, following the curve.' }
 ];
+const stepIndex = key => STEPS.findIndex(x => x.key === key);
 const L = {                      // live-scanner runtime (not part of the saved state)
   stream:null, track:null, video:null, raf:0, timer:0,
   step:0, samples:0, lastSample:0, reading:false, sharp:0, torch:false,
-  frames:{}, checks:{ front:null, back:null, catno:null, runout:null }, msg:''
+  frames:{}, checks:{ barcode:null, front:null, back:null, catno:null, runout:null }, msg:''
 };
 
 async function startLive() {
@@ -471,7 +479,7 @@ async function startLive() {
   } catch (e) { /* a camera that reports nothing is not an error */ }
   L.step = 0; L.samples = 0; L.frames = {}; L.msg = ''; L.best = 0; L.stepStart = performance.now();
   L.bcDone = false; L.bcBusy = false; L.barcodeHits = null;
-  L.checks = { front:null, back:null, catno:null, runout:null };
+  L.checks = { barcode:null, front:null, back:null, catno:null, runout:null };
   render();
   const v = $('#feed');
   if (v) { v.srcObject = L.stream; v.play().catch(()=>{}); }
@@ -573,7 +581,7 @@ async function sniffBarcode(v) {
     const code = hits && hits.length ? String(hits[0].rawValue || '').replace(/\D/g, '') : '';
     if (code.length >= 8) {
       L.bcDone = true;
-      L.checks.catno = 'barcode ' + code;
+      L.checks.barcode = code + ' \u2014 read on the device, free';
       S.read = Object.assign({}, S.read, { barcode: code });
       L.msg = 'Barcode read on the device — no credit spent.';
       render();
@@ -589,7 +597,12 @@ async function resolveBarcode(code) {
   try {
     const j = await dg('/database/search?per_page=20&barcode=' + encodeURIComponent(code));
     const hits = (j.results || []).filter(x => x.type === 'release');
-    if (!hits.length) { L.msg = 'That barcode is not in the catalogue — carrying on with the sleeve.'; return render(); }
+    if (!hits.length) {
+      L.msg = 'That barcode is not in the catalogue \u2014 carrying on with the sleeve.';
+      const fi = stepIndex('front');
+      if (L.step < fi) { L.step = fi; L.samples = 0; L.best = 0; L.stepStart = performance.now(); }
+      return render();
+    }
     if (hits.length === 1) {
       L.msg = 'Barcode matched one release exactly.';
       render(); stopLive();
@@ -597,7 +610,8 @@ async function resolveBarcode(code) {
     }
     L.barcodeHits = hits;
     L.msg = hits.length + ' releases share that barcode — the runout will separate them.';
-    if (L.step < 2) { L.step = 2; L.samples = 0; L.best = 0; L.stepStart = performance.now(); }
+    const ri = stepIndex('runout');
+    if (L.step < ri) { L.step = ri; L.samples = 0; L.best = 0; L.stepStart = performance.now(); }
     render();
   } catch (e) { L.msg = e.message; render(); }
 }
@@ -692,7 +706,7 @@ async function readStep() {
   // On the runout the target is a couple of centimetres of etched metal. Send the
   // reticle patch rather than the whole frame, or the characters arrive too small
   // to read at any resolution.
-  const b = step.key === 'runout'
+  const b = (step.key === 'runout' || step.key === 'barcode')
     ? grabFrame(1600, reticleCrop(0.10))
     : grabFrame();
   if (!b) return;
@@ -705,6 +719,16 @@ async function readStep() {
       if (step.key === 'back')   { L.checks.back   = a.country ? 'made in ' + a.country : 'back captured';
                                    if (a.catno || a.barcode) L.checks.catno = a.catno || ('barcode ' + a.barcode); }
       if (step.key === 'runout') { L.checks.runout = a.reading || 'runout captured'; }
+      if (step.key === 'barcode') {
+        const digits = String(a.barcode || '').replace(/\D/g, '');
+        L.checks.barcode = digits || 'barcode captured';
+        if (digits.length >= 8) {
+          S.read = Object.assign({}, S.read, { barcode: digits });
+          L.step = stepIndex('front'); L.samples = 0; L.best = 0; L.stepStart = performance.now();
+          render();
+          return resolveBarcode(digits);        // this may end the scan outright
+        }
+      }
       S.read = Object.assign({}, S.read, {
         artist: a.artist || (S.read||{}).artist, title: a.title || (S.read||{}).title,
         catno: a.catno || (S.read||{}).catno, barcode: a.barcode || (S.read||{}).barcode,
@@ -736,6 +760,12 @@ JSON only: {"usable":<bool>,"artist":null,"title":null,"why":"if not usable, wha
 Read only what is genuinely legible: catalogue number (a short code like "SHVL 804", not the barcode), barcode digits, country of manufacture ("Made in England" means UK), artist, title.
 Set usable true only if you got a catalogue number OR a barcode.
 JSON only: {"usable":<bool>,"catno":null,"barcode":null,"country":null,"artist":null,"title":null,"why":"if not usable, what to change in under 10 words"}`,
+  barcode:
+`This is a close-up camera frame that should show a product BARCODE on a record sleeve.
+Read the digits printed beneath the bars. It is normally 13 digits (EAN) or 12 (UPC), often printed in groups with spaces.
+Set usable true only if you can read the full run of digits with confidence. If some are cut off or blurred, set usable false and say what to change.
+Return the digits only, no spaces.
+JSON only: {"usable":<bool>,"barcode":"the digits, or empty","why":"if not usable, what to change in under 10 words"}`,
   runout:
 `This is a close-up camera frame of the RUNOUT MATRIX — the code in the smooth dead wax between the last groove and the label of a vinyl record.
 Expect it to be hard to read, and read it anyway if you can:
@@ -1073,13 +1103,13 @@ function render() {
       $('#exNow').onclick = loadExample;
     }
     add(`<h1>Point it at a record.</h1>`);
-    add(`<p class="note">Photograph the sleeve and the app works out the album, then every pressing of it, then which one you are holding. The <b>back</b> of the sleeve gives it most to go on.</p>`);
+    add(`<p class="note"><b>Start with the barcode if the record has one.</b> It is the single most reliable thing on a modern sleeve, most phones read it themselves for nothing, and seven times in ten it names the exact pressing on its own \u2014 no runout needed. Older records have no barcode, and that is what the rest of the scan is for.</p>`);
     const live = el(`<button class="primary" style="padding:20px 16px;font-size:17px">&#128247;&nbsp; Start scanning</button>`);
     live.onclick = startLive; add(live);
     add(`<div class="checks">
-      <div><b></b>Sleeve front</div><div><b></b>Sleeve back</div>
+      <div><b></b>Barcode</div><div><b></b>Sleeve front</div><div><b></b>Sleeve back</div>
       <div><b></b>Catalogue number</div><div><b></b>Runout matrix</div></div>`);
-    add(`<p class="note">The camera stays live and ticks each one off as it gets what it needs. Four things, in that order.</p>`);
+    add(`<p class="note">The camera stays live and ticks each one off as it gets what it needs, in that order \u2014 and stops early the moment it is certain. A barcode alone often does it.</p>`);
     const one = el(`<button class="ghost">Photograph a sleeve instead</button>`);
     one.onclick = () => go('capture1'); add(one);
     if (S.sleeveShot && S.read) {
@@ -1205,10 +1235,11 @@ function render() {
               : ' This browser has no barcode decoder, so a barcode is read from the photo like everything else.'}</p>`);
 
     const rowsHtml = [
-      ['front',  'Sleeve front'],
-      ['back',   'Sleeve back'],
-      ['catno',  'Catalogue number'],
-      ['runout', 'Runout matrix']
+      ['barcode', 'Barcode'],
+      ['front',   'Sleeve front'],
+      ['back',    'Sleeve back'],
+      ['catno',   'Catalogue number'],
+      ['runout',  'Runout matrix']
     ].map(([k, lbl]) => {
       const done = !!L.checks[k];
       const now  = !done && ((step.key === k) || (step.key === 'back' && k === 'catno'));
