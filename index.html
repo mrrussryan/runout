@@ -227,6 +227,34 @@ async function ask(content) {
   if (!m) throw new Error('Unexpected reply: ' + text.slice(0, 180));
   return JSON.parse(m[0]);
 }
+// A cheap live call to prove the credentials actually work, and to surface the
+// real error when they do not.
+async function testCredentials() {
+  const ep = endpoint();
+  const key = (LS.getItem('anthKey') || '').trim();
+  if (!ep && !key) throw new Error('Nothing to test — add a key or a shared endpoint first.');
+  const headers = ep
+    ? { 'content-type': 'application/json', ...(ep.code ? { 'x-app-password': ep.code } : {}) }
+    : { 'content-type': 'application/json', 'x-api-key': key,
+        'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' };
+  const r = await fetch(ep ? ep.url : 'https://api.anthropic.com/v1/messages', {
+    method: 'POST', headers,
+    body: JSON.stringify({ model: 'claude-opus-5', max_tokens: 4,
+                           messages: [{ role: 'user', content: 'Reply with the word ok.' }] })
+  });
+  let j;
+  try { j = await r.json(); } catch (e) { throw new Error('Unreadable reply (HTTP ' + r.status + ').'); }
+  if (j.type === 'error' || j.error) {
+    const m = (j.error && j.error.message) || 'Unknown error';
+    if (/credit balance|insufficient/i.test(m))
+      throw new Error('The key works, but the account has no credit. Add some under Billing at platform.claude.com.');
+    if (/invalid x-api-key|api key is invalid|authentication|unauthor/i.test(m))
+      throw new Error('That key was rejected. Check it was pasted whole — it should start sk-ant- and have no spaces.');
+    throw new Error(m);
+  }
+  return { via: ep ? 'shared endpoint' : 'your own key', model: j.model || 'claude-opus-5' };
+}
+
 const img = b => ({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: b } });
 
 /* ---------------- camera ---------------- */
@@ -1129,21 +1157,43 @@ function render() {
   if (S.screen === 'settings') {
     add(`<h1>Settings</h1>`);
     const hasEp = !!(LS.getItem('proxyUrl') || '').trim();
-    add(`<div class="banner ${hasEp ? 'info' : 'warn'}">${hasEp
-      ? 'Using a shared endpoint — no personal key needed on this device.'
+    const savedKey = (LS.getItem('anthKey') || '').trim();
+    const tail = savedKey ? savedKey.slice(-4) : '';
+    add(`<div class="banner ${hasEp || savedKey ? 'info' : 'warn'}">${
+      hasEp ? 'Using a <b>shared endpoint</b> — no personal key needed on this device.'
+      : savedKey ? `A key is <b>saved on this device</b>, ending <span class="mono">…${esc(tail)}</span>. Nothing to press — it saves as you type.`
       : 'Reading photographs needs credit behind it. Use <b>either</b> a shared endpoint (then nobody needs their own key) <b>or</b> your own API key.'}</div>`);
+    if (hasEp || savedKey) {
+      const tb = el(`<button class="primary" id="verify">Test it now</button>`);
+      tb.onclick = async () => {
+        S.error = ''; S.busy = 'Testing…'; render();
+        try {
+          const ok = await testCredentials();
+          S.busy = ''; S.verified = 'Working — a live reply came back via ' + ok.via + ' (' + ok.model + ').';
+        } catch (e) { S.busy = ''; S.verified = ''; S.error = e.message; }
+        render();
+      };
+      add(tb);
+      if (S.verified) add(`<div class="banner info" style="color:var(--brand);font-weight:700">✓ ${esc(S.verified)}</div>`);
+    }
     const ep = el(`<div class="card"><div class="eyebrow">Shared endpoint — the easy way</div>
       <input id="pu" type="url" inputmode="url" placeholder="https://…workers.dev" value="${esc(LS.getItem('proxyUrl') || '')}" autocomplete="off">
       <input id="pc" type="password" placeholder="Access code" value="${esc(LS.getItem('proxyCode') || '')}" autocomplete="off" style="margin-top:8px">
       <div class="s">Set up once, holds the key server-side. Anyone with the link and the code can then use the app without a key of their own. <code>worker.js</code> in the project is the whole thing — about thirty lines.</div></div>`);
     add(ep);
-    $('#pu').onchange = e => { LS.setItem('proxyUrl', e.target.value.trim()); render(); };
-    $('#pc').onchange = e => LS.setItem('proxyCode', e.target.value.trim());
+    $('#pu').oninput = e => LS.setItem('proxyUrl', e.target.value.trim());
+    $('#pu').onchange = e => { LS.setItem('proxyUrl', e.target.value.trim()); S.verified = ''; render(); };
+    $('#pc').oninput = e => LS.setItem('proxyCode', e.target.value.trim());
     const k = el(`<div class="card"><div class="eyebrow">Or your own Anthropic key</div>
       <input id="key" type="password" placeholder="sk-ant-…" value="${esc(LS.getItem('anthKey') || '')}" autocomplete="off">
-      <div class="s">Kept in this browser only and sent straight to api.anthropic.com. Fine for your own trial; not something to share.</div></div>`);
+      <div class="s" id="keysaved" style="color:var(--brand);font-weight:700">${savedKey ? 'Saved on this device' : ''}</div>
+      <div class="s">Saves as you type — there is no save button. Kept in this browser only and sent straight to api.anthropic.com. Fine for your own trial; not something to share.</div></div>`);
     add(k);
-    $('#key').onchange = e => LS.setItem('anthKey', e.target.value.trim());
+    $('#key').oninput = e => {                       // save on every keystroke and on paste,
+      LS.setItem('anthKey', e.target.value.trim());  // not only when the field loses focus
+      const b = $('#keysaved'); if (b) b.textContent = e.target.value.trim() ? 'Saved on this device' : '';
+    };
+    $('#key').onchange = () => { S.verified = ''; render(); };
     const t = rows();
     add(`<div class="card tonal"><div class="eyebrow">Trial results</div>
       <div class="s">${t.length} scans logged, ${t.filter(x=>x.correct).length} correct${t.length?` — ${Math.round(t.filter(x=>x.correct).length/t.length*100)}% top-1`:''}.</div></div>`);
@@ -1157,7 +1207,7 @@ function render() {
       const url = URL.createObjectURL(new Blob([head+'\n'+body], {type:'text/csv'}));
       const a = document.createElement('a'); a.href = url; a.download = 'runout-trial.csv'; a.click();
     };
-    $('#wipe').onclick = () => { ['rows','proxyUrl','proxyCode','anthKey'].forEach(k => LS.removeItem(k)); render(); };
+    $('#wipe').onclick = () => { ['rows','proxyUrl','proxyCode','anthKey'].forEach(k => LS.removeItem(k)); S.verified=''; render(); };
     add(`<details><summary>What this demo does and does not do</summary><div>
       <div class="s"><b>Real:</b> every version, catalogue number, runout, price and cover comes live from the Discogs API. The identification and the condition read are real model calls on your photographs.</div>
       <div class="s"><b>Not real:</b> it cannot create the listing for you — that needs your Discogs login — so it hands off to the normal Discogs form with the right release already chosen.</div>
