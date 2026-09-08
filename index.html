@@ -137,6 +137,13 @@ a{color:var(--blue)}
   box-shadow:0 0 0 2000px rgba(0,0,0,.34);transition:all .35s ease}
 .reticle.sq{inset:14% 8% auto 8%;aspect-ratio:1/1}
 .reticle.ring{inset:12% 14%;border-radius:50%;aspect-ratio:1/1}
+/* A runout follows the curve of the dead wax, but a SHORT span of that curve is
+   nearly straight — so aim a wide shallow band along the writing rather than a
+   circle around it. It also forces the phone in close, which is what the
+   characters actually need. */
+.reticle.band{inset:auto 6% 34%;height:19%;border-radius:8px}
+.reticle.band::after{content:'';position:absolute;inset:50% 0 auto;height:1px;
+  background:rgba(255,255,255,.45)}
 .reticle.on{border-color:#3ddc84;box-shadow:0 0 0 2000px rgba(0,0,0,.34),0 0 14px rgba(61,220,132,.7)}
 .vp-hint{position:absolute;left:0;right:0;bottom:0;padding:12px 14px 14px;color:#fff;max-height:4.4em;overflow:hidden;
   background:linear-gradient(to top,rgba(0,0,0,.72),transparent);font-size:13px;font-weight:600;line-height:1.4;text-align:center}
@@ -432,8 +439,8 @@ const STEPS = [
     hint:'Fill the frame with the front cover.' },
   { key:'back',   label:'Sleeve back',  shape:'sq',
     hint:'Show the back — this is where the catalogue number and barcode are.' },
-  { key:'runout', label:'Runout matrix', shape:'ring',
-    hint:'Torch on. Tilt the record so the light skims across the dead wax.' }
+  { key:'runout', label:'Runout matrix', shape:'band',
+    hint:'Torch on. Get close and lay the band along the scratched writing, following the curve.' }
 ];
 const L = {                      // live-scanner runtime (not part of the saved state)
   stream:null, track:null, video:null, raf:0, timer:0,
@@ -445,7 +452,9 @@ async function startLive() {
   S.error = ''; go('scan');
   try {
     L.stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1440 } },
+      video: { facingMode: { ideal: 'environment' },
+               width: { ideal: 2560 }, height: { ideal: 1920 },
+               focusMode: 'continuous' },
       audio: false
     });
   } catch (e) {
@@ -453,6 +462,13 @@ async function startLive() {
     S.screen = 'capture'; return render();
   }
   L.track = L.stream.getVideoTracks()[0];
+  // Optical or sensor zoom, where the phone offers it, beats cropping pixels we
+  // never captured. Not all cameras report it; those simply get no slider.
+  L.zoomMax = 1; L.zoom = 1;
+  try {
+    const caps = L.track.getCapabilities ? L.track.getCapabilities() : {};
+    if (caps.zoom && caps.zoom.max > 1) L.zoomMax = Math.min(caps.zoom.max, 5);
+  } catch (e) { /* a camera that reports nothing is not an error */ }
   L.step = 0; L.samples = 0; L.frames = {}; L.msg = ''; L.best = 0; L.stepStart = performance.now();
   L.bcDone = false; L.bcBusy = false; L.barcodeHits = null;
   L.checks = { front:null, back:null, catno:null, runout:null };
@@ -498,14 +514,39 @@ function sharpness(v) {
   return n ? sum / n : 0;
 }
 
-function grabFrame(max) {
+// The reticle is drawn in CSS pixels over a video shown with object-fit:cover,
+// so the box on screen is not the box in the camera's frame. Map one to the
+// other, then we can send just that patch at full sensor resolution.
+function reticleCrop(pad) {
+  const v = L.video || $('#feed'); const r = $('#ret');
+  if (!v || !r || !v.videoWidth) return null;
+  const vb = v.getBoundingClientRect(), rb = r.getBoundingClientRect();
+  if (!vb.width || !rb.width) return null;
+  const vw = v.videoWidth, vh = v.videoHeight;
+  const scale = Math.max(vb.width / vw, vb.height / vh);   // cover scales by the larger ratio
+  const offX = (vb.width - vw * scale) / 2, offY = (vb.height - vh * scale) / 2;
+  const p = (pad || 0);
+  let w = rb.width / scale, h = rb.height / scale;
+  let x = (rb.left - vb.left - offX) / scale, y = (rb.top - vb.top - offY) / scale;
+  x -= w * p; y -= h * p; w *= 1 + 2 * p; h *= 1 + 2 * p;   // a little slack for a wobbly hand
+  x = Math.max(0, x); y = Math.max(0, y);
+  w = Math.min(w, vw - x); h = Math.min(h, vh - y);
+  if (w < 40 || h < 40) return null;
+  return { x, y, w, h };
+}
+
+// max caps the LONG side of what we send. Cropping first means those pixels are
+// spent on the thing being read instead of on the sleeve around it: a runout
+// that occupied ~500px of a downscaled full frame gets the whole budget.
+function grabFrame(max, crop) {
   const v = L.video || $('#feed');
   if (!v || !v.videoWidth) return null;
-  const sc = Math.min(1, (max || 1500) / Math.max(v.videoWidth, v.videoHeight));
+  const src = crop || { x: 0, y: 0, w: v.videoWidth, h: v.videoHeight };
+  const sc = Math.min(1, (max || 1500) / Math.max(src.w, src.h));
   const c = document.createElement('canvas');
-  c.width = Math.round(v.videoWidth * sc); c.height = Math.round(v.videoHeight * sc);
-  c.getContext('2d').drawImage(v, 0, 0, c.width, c.height);
-  return c.toDataURL('image/jpeg', 0.85).split(',')[1];
+  c.width = Math.round(src.w * sc); c.height = Math.round(src.h * sc);
+  c.getContext('2d').drawImage(v, src.x, src.y, src.w, src.h, 0, 0, c.width, c.height);
+  return c.toDataURL('image/jpeg', 0.9).split(',')[1];
 }
 
 // A barcode is the strongest handle a new record has, and browsers that ship
@@ -561,7 +602,10 @@ async function resolveBarcode(code) {
   } catch (e) { L.msg = e.message; render(); }
 }
 
-const SHARP_FLOOR = 2.2;        // anything below this is a black or hopeless frame
+const SHARP_FLOOR = 2.2;        // a good printed sleeve clears this comfortably
+const DEAD_FRAME  = 0.12;       // below this there is genuinely nothing in front of the lens.
+                                // Kept very low on purpose: a dark runout in poor
+                                // light is still a real frame worth reading.
 const COOLDOWN    = 2600;       // ms between reads, so a live feed cannot run away with cost
 const MAX_TRIES   = 5;          // per step, then it asks for a manual shot
 const PATIENCE    = 7000;       // if nothing has looked good for this long, read anyway
@@ -571,9 +615,22 @@ const PATIENCE    = 7000;       // if nothing has looked good for this long, rea
 // step and fires near it. A fixed threshold set blind would either fire on mush
 // or — worse — sit there doing nothing at all.
 function gateOpen(now) {
-  if (L.sharp < SHARP_FLOOR) return false;
+  // Learn what "sharp" looks like for THIS surface first. A runout is dark,
+  // low-contrast etched metal and scores far below a printed sleeve, so a fixed
+  // floor checked before the patience rescue used to strand the scanner here
+  // forever: the gate never opened and the fallback was never reached.
   L.best = Math.max(L.best || 0, L.sharp);
-  if (now - (L.stepStart || now) > PATIENCE) return true;   // never just sit there
+  L.waited = now - (L.stepStart || now);
+  // Two rules, in this order, and the second one always wins in the end:
+  //   a frame that looks dead is not worth a read straight away, BUT
+  //   nothing may block a read forever. Our sharpness figure is only a proxy, and
+  //   on etched metal in poor light it can read near zero on a frame that is
+  //   actually fine. So a "dead" frame buys a grace period, not a veto: after it,
+  //   read anyway and let the answer say what is wrong. One wasted read beats a
+  //   scanner that sits there doing nothing.
+  L.dead = L.sharp < DEAD_FRAME;
+  if (L.dead && L.waited < PATIENCE * 2) return false;
+  if (L.waited > PATIENCE) return true;                     // never just sit there
   return L.sharp >= Math.max(SHARP_FLOOR, L.best * 0.8);
 }
 
@@ -592,11 +649,32 @@ function tick() {
   const now = performance.now();
   const bar = $('#sharpbar');
   if (bar) bar.style.width = Math.min(100, L.sharp / Math.max(4, (L.best || 4)) * 100) + '%';
-  const ret = $('#ret'); if (ret) ret.classList.toggle('on', gateOpen(now));
+  const open = gateOpen(now);
+  const ret = $('#ret'); if (ret) ret.classList.toggle('on', open);
+  const dg2 = $('#diag');
+  if (dg2) {
+    const left = Math.max(0, Math.ceil((PATIENCE - (L.waited || 0)) / 1000));
+    dg2.textContent = L.reading
+      ? 'reading the frame\u2026'
+      : L.samples >= MAX_TRIES
+        ? 'five tries used here \u2014 tap Read this now, or Skip this'
+        : L.dead
+          ? 'very little light on this \u2014 add some, or it reads anyway in ' +
+            Math.max(1, Math.ceil((PATIENCE * 2 - (L.waited || 0)) / 1000)) + 's'
+          : 'focus ' + L.sharp.toFixed(1) + ' of ' + Math.max(L.best, L.sharp).toFixed(1) +
+            (open ? ' \u00b7 reading' : ' \u00b7 reads anyway in ' + Math.max(1, left) + 's');
+  }
   if (L.reading || L.step >= STEPS.length || L.samples >= MAX_TRIES) return;
   if (now - L.lastSample < COOLDOWN) return;
   if (!gateOpen(now)) return;
   L.lastSample = now; readStep();
+}
+
+async function setZoom(n) {
+  L.zoom = n;
+  const zv = $('#zoomv'); if (zv) zv.textContent = n.toFixed(1) + '\u00d7';
+  try { await L.track.applyConstraints({ advanced: [{ zoom: n }] }); }
+  catch (e) { /* a camera that will not zoom is not an error */ }
 }
 
 async function readStep() {
@@ -611,7 +689,13 @@ async function readStep() {
     render();
     return;
   }
-  const b = grabFrame(); if (!b) return;
+  // On the runout the target is a couple of centimetres of etched metal. Send the
+  // reticle patch rather than the whole frame, or the characters arrive too small
+  // to read at any resolution.
+  const b = step.key === 'runout'
+    ? grabFrame(1600, reticleCrop(0.10))
+    : grabFrame();
+  if (!b) return;
   L.reading = true; L.samples++; L.msg = ''; render();
   try {
     const a = await ask([img(b), { type: 'text', text: PROMPTS[step.key] }]);
@@ -629,6 +713,7 @@ async function readStep() {
       if (step.key === 'runout') S.shots = [b];
       L.step++; L.samples = 0; L.msg = ''; L.best = 0; L.stepStart = performance.now();
       if (L.step >= STEPS.length) return finishLive();
+      if (STEPS[L.step] && STEPS[L.step].key === 'runout' && L.zoomMax > 1.4) setZoom(Math.min(2, L.zoomMax));
       // the album can be looked up while the user turns the record over
       if (step.key === 'back') prefetchAlbum();
     } else {
@@ -652,9 +737,15 @@ Read only what is genuinely legible: catalogue number (a short code like "SHVL 8
 Set usable true only if you got a catalogue number OR a barcode.
 JSON only: {"usable":<bool>,"catno":null,"barcode":null,"country":null,"artist":null,"title":null,"why":"if not usable, what to change in under 10 words"}`,
   runout:
-`This is a live camera frame that should show the RUNOUT MATRIX — the code stamped or etched into the smooth dead wax between the last groove and the label of a vinyl record.
-Set usable true ONLY if you can read actual characters. Transcribe exactly what you see, using ? for characters you cannot make out. Do not guess and do not complete it from memory.
-JSON only: {"usable":<bool>,"reading":"the characters, or empty","why":"if not usable, what to change in under 10 words — e.g. lower the light angle"}`
+`This is a close-up camera frame of the RUNOUT MATRIX — the code in the smooth dead wax between the last groove and the label of a vinyl record.
+Expect it to be hard to read, and read it anyway if you can:
+- It follows the CURVE of the disc, so the characters arc across the frame and each one may sit at a slightly different angle.
+- Much of it is cut BY HAND with a stylus, so strokes are uneven, thin, scratchy and irregularly spaced. Machine-stamped ones are neater. Both are normal.
+- It is often only visible as a glint where the light rakes across it, and may be faint, doubled, or partly polished away.
+- There may be several separate marks: a catalogue-style code, stamper letters, a mastering engineer's initials or logo, and unrelated scratches. Transcribe the code-like characters; ignore obvious surface scuffs.
+- Characters can appear upside down or mirrored depending on how the record is held. Read them in whatever orientation makes them letters and digits.
+Set usable true ONLY if you can genuinely make out characters. Transcribe EXACTLY what is there, preserving spacing, and use ? for any character you cannot resolve. Never complete a code from memory or from what a pressing "should" say.
+JSON only: {"usable":<bool>,"reading":"the characters, or empty","why":"if not usable, what to change in under 10 words — e.g. get closer, or lower the light angle"}`
 };
 
 async function prefetchAlbum() {
@@ -1108,6 +1199,7 @@ function render() {
     if (L.stream) { v.srcObject = L.stream; v.play().catch(()=>{}); L.video = v; }
 
     add(`<div class="meter"><i id="sharpbar" style="width:0%"></i></div>`);
+    add(`<p class="note mono" id="diag" style="margin-top:-4px;font-size:11px;opacity:.75"></p>`);
     add(`<p class="note" style="margin-top:-4px">Focus. It reads a frame by itself once the picture is sharp enough — it will not waste a read on a blurred one.${
       bcReady ? ' <b>Barcodes decode on the device, free and instantly</b> — show it the barcode and it may not need anything else.'
               : ' This browser has no barcode decoder, so a barcode is read from the photo like everything else.'}</p>`);
@@ -1127,10 +1219,18 @@ function render() {
 
     const ctl = el(`<div class="row" style="align-items:center">
       <button class="ghost" id="torch">${L.torch ? 'Torch off' : 'Torch on'}</button>
-      <button class="ghost" id="manual">Read now</button>
+      <button class="primary" id="manual" style="flex:1.4">Read this now</button>
       <button class="ghost" id="skip">Skip this</button></div>`);
     add(ctl);
     $('#torch').onclick = toggleTorch;
+    if (L.zoomMax > 1) {
+      const z = el(`<div class="row" style="align-items:center;gap:10px;margin-top:6px">
+        <span class="s" style="flex:none">Zoom</span>
+        <input id="zoom" type="range" min="1" max="${L.zoomMax}" step="0.1" value="${L.zoom || 1}" style="flex:1">
+        <span class="s mono" style="flex:none" id="zoomv">${(L.zoom || 1).toFixed(1)}&times;</span></div>`);
+      add(z);
+      $('#zoom').oninput = e => setZoom(parseFloat(e.target.value));
+    }
     $('#manual').onclick = () => { if (!L.reading) { L.lastSample = performance.now(); L.samples = 0; readStep(); } };
     $('#skip').onclick = () => { L.step++; L.samples = 0; L.msg = ''; L.best = 0; L.stepStart = performance.now();
       if (L.step >= STEPS.length) finishLive(); else render(); };
