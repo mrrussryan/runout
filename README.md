@@ -26,7 +26,9 @@ prices and cover art all come from the public API.
 
 ## What it does
 
-1. Search for the album
+1. Photograph the sleeve. It reads the artist, title, catalogue number, barcode
+   and country of manufacture, then finds the album (a barcode goes straight to
+   the pressings that carry it). Typing the album name is still there as a fallback.
 2. Filter to a country and format; load the runouts recorded for each version
 3. Photograph the runout matrix (torch on, low angle, 2–3 frames)
 4. Rank the candidates, with a confidence and the margin over the runner-up

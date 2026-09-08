@@ -1,6 +1,6 @@
 // Cache the app shell so it opens without a connection.
 // API calls are never cached — they must be live.
-const SHELL = 'runout-shell-v1';
+const SHELL = 'runout-shell-v2';
 const FILES = ['./', './index.html', './manifest.webmanifest', './icon.svg'];
 
 self.addEventListener('install', e => {

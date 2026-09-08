@@ -144,7 +144,7 @@ const S = {                       // app state
   screen: 'search', stack: [],
   query: '', results: [], album: null,
   versions: [], country: '', fmt: 'vinyl', cap: 14, candidates: [],
-  shots: [], match: null, asked: null, release: null,
+  shots: [], match: null, asked: null, release: null, read: null, sleeveShot: null, typing: false,
   condShots: [], condition: null, busy: ''
 };
 
@@ -187,22 +187,44 @@ const img = b => ({ type: 'image', source: { type: 'base64', media_type: 'image/
 /* ---------------- camera ---------------- */
 function shrink(file) {
   return new Promise((res, rej) => {
+    if (!file || !file.size) return rej(new Error('That photo came through empty. Try again.'));
+    if (file.size > 40 * 1024 * 1024) return rej(new Error('That photo is very large. Try again at a lower resolution.'));
+    let done = false;
+    const finish = fn => (...a) => { if (!done) { done = true; clearTimeout(timer); fn(...a); } };
+    const ok = finish(res), no = finish(rej);
+    // some pictures neither load nor error — a HEIC on a browser that cannot decode
+    // it, or a corrupt file — so never wait on them indefinitely
+    const timer = setTimeout(() => no(new Error(
+      'That photo could not be opened. If it is a HEIC from an iPhone library, take a fresh photo with the camera button instead.'
+    )), 20000);
     const i = new Image(), rd = new FileReader();
-    rd.onerror = () => rej(new Error('Could not read that photo.'));
-    rd.onload = () => i.src = rd.result;
+    rd.onerror = () => no(new Error('Could not read that file.'));
+    rd.onload = () => { i.src = rd.result; };
+    i.onerror = () => no(new Error('That file is not an image the browser can open.'));
     i.onload = () => {
-      const M = 1500, sc = Math.min(1, M / Math.max(i.width, i.height));
-      const c = document.createElement('canvas');
-      c.width = Math.round(i.width * sc); c.height = Math.round(i.height * sc);
-      c.getContext('2d').drawImage(i, 0, 0, c.width, c.height);
-      res(c.toDataURL('image/jpeg', 0.85).split(',')[1]);
+      try {
+        if (!i.width || !i.height) return no(new Error('That photo has no dimensions.'));
+        const M = 1500, sc = Math.min(1, M / Math.max(i.width, i.height));
+        const c = document.createElement('canvas');
+        c.width = Math.max(1, Math.round(i.width * sc));
+        c.height = Math.max(1, Math.round(i.height * sc));
+        c.getContext('2d').drawImage(i, 0, 0, c.width, c.height);
+        const d = c.toDataURL('image/jpeg', 0.85).split(',')[1];
+        if (!d) return no(new Error('Could not process that photo.'));
+        ok(d);
+      } catch (e) { no(new Error('Could not process that photo: ' + e.message)); }
     };
-    rd.readAsDataURL(file);
+    try { rd.readAsDataURL(file); } catch (e) { no(new Error('Could not read that file.')); }
   });
 }
 async function addShots(input, bucket, max) {
-  for (const f of input.files) { if (S[bucket].length >= max) break; S[bucket].push(await shrink(f)); }
-  input.value = ''; render();
+  const files = [...input.files]; input.value = '';
+  for (const f of files) {
+    if (S[bucket].length >= max) break;
+    try { S[bucket].push(await shrink(f)); }
+    catch (e) { S.error = e.message; }
+  }
+  render();
 }
 
 /* ---------------- nav ---------------- */
@@ -227,7 +249,7 @@ function logResult(ok) {
   reset(); go('search', true);
 }
 function reset() {
-  Object.assign(S, { demo: false, shots: [], match: null, asked: null, release: null,
+  Object.assign(S, { demo: false, read: null, sleeveShot: null, typing: false, shots: [], match: null, asked: null, release: null,
                      condShots: [], condition: null, candidates: [], versions: [],
                      album: null, country: '', error: '' });
   S.stack = [];
@@ -251,7 +273,8 @@ async function doSearch(q) {
 }
 
 async function pickAlbum(a) {
-  S.album = a; S.versions = []; S.country = ''; S.candidates = [];
+  S.album = a; S.versions = []; S.candidates = [];
+  S.country = (S.read && S.read.country) || '';      // the sleeve usually says where it was made
   go('narrow');
   busy('Loading every version…');
   try {
@@ -308,6 +331,95 @@ async function loadRunouts() {
   const withR = S.candidates.filter(c => c.runouts.length).length;
   if (withR === 0) S.error = 'None of these has a runout recorded, so there is nothing to match a photo against. This is the 56% gap — you can still list it by hand, and a scan would be a genuine contribution.';
   else if (withR === 1) S.error = 'Only one of these has a runout on file, so a photo cannot separate them.';
+  render();
+}
+
+/* ---- scan the sleeve to find the record ---- */
+async function scanSleeve(file) {
+  busy('Looking at the sleeve…');
+  try {
+    const b = await shrink(file);
+    S.sleeveShot = b;
+    const prompt =
+`This photograph is of a record sleeve — it may be the front or the back.
+
+Do two separate things and do not mix them up:
+1. TRANSCRIBE any text you can actually read: artist, title, catalogue number, barcode digits, country of manufacture ("Made in..."), year, label name.
+2. IDENTIFY the album from the artwork if you recognise it.
+
+Rules:
+- Only report text you can genuinely read. Use null for anything you cannot.
+- The catalogue number is usually on the back and the spine, and on the labels. It is a short code like "SHVL 804" or "PFRLP8", not a barcode.
+- Country: give the plain country name as a record catalogue would ("UK", "US", "Germany", "Japan"). "Made in England" means UK.
+- If the sleeve is not a record sleeve at all, set not_a_record to true.
+
+Reply with JSON only:
+{"artist":"...","title":"...","catno":null,"barcode":null,"country":null,"year":null,"label":null,
+ "recognised_from_artwork":<true|false>,"not_a_record":<true|false>,"confidence":<0-100>,"read":"what you could see"}`;
+    const a = await ask([img(b), { type: 'text', text: prompt }]);
+    S.read = a;
+    if (a.not_a_record) { S.busy=''; S.error = 'That does not look like a record sleeve. Try again, or type the album name.'; return render(); }
+
+    // barcode is the most precise handle, so try it first
+    if (a.barcode) {
+      const digits = String(a.barcode).replace(/\D/g, '');
+      if (digits.length >= 8) {
+        S.busy = 'Looking up the barcode…';
+        render();
+        const j = await dg('/database/search?per_page=20&barcode=' + encodeURIComponent(digits));
+        const hits = (j.results || []).filter(r => r.type === 'release');
+        if (hits.length) { return fromBarcode(hits, a); }
+      }
+    }
+    // otherwise search by what it read, or what it recognised
+    const q = [a.artist, a.title].filter(Boolean).join(' ');
+    if (!q) { S.busy=''; S.error = 'Could not read enough from that photo. Try the back of the sleeve, or type the album name.'; return render(); }
+    S.query = q;
+    S.busy = 'Searching for “' + q + '”…';
+    render();
+    const j = await dg('/database/search?type=master&per_page=12&q=' + encodeURIComponent(q));
+    S.results = (j.results || []).map(r => ({ id: r.id, title: r.title, year: r.year, thumb: r.thumb, country: r.country }));
+    S.busy = '';
+    if (!S.results.length) { S.error = 'Nothing matched “' + q + '”. Try the back of the sleeve, or type it in.'; return render(); }
+    if (S.results.length === 1) return pickAlbum(S.results[0]);
+    render();
+  } catch (e) { fail(e); }
+}
+
+// a barcode narrowed it to specific releases rather than an album
+async function fromBarcode(hits, read) {
+  S.busy = 'Reading the pressings…';
+  render();
+  const out = [];
+  for (const h of hits.slice(0, 8)) {
+    try {
+      const rel = await dg('/releases/' + h.id);
+      out.push({
+        id: h.id, catno: (rel.labels && rel.labels[0] && rel.labels[0].catno) || read.catno || '',
+        format: (rel.formats || []).map(f => f.name).join(', '), country: rel.country, year: rel.year,
+        label: (rel.labels && rel.labels[0] && rel.labels[0].name) || '',
+        owned: rel.community && rel.community.have, lowest: rel.lowest_price, forSale: rel.num_for_sale,
+        have: rel.community && rel.community.have, want: rel.community && rel.community.want,
+        cover: (rel.images && rel.images[0] && (rel.images[0].uri150 || rel.images[0].uri)) || h.thumb || '',
+        master: rel.master_id,
+        runouts: (rel.identifiers || []).filter(i => /matrix|runout/i.test(i.type || ''))
+                   .filter(i => !/label/i.test(i.description || ''))
+                   .map(i => ({ v: i.value, d: i.description || '' }))
+      });
+    } catch (e) {}
+  }
+  S.candidates = out;
+  S.album = { id: out[0] && out[0].master, title: [read.artist, read.title].filter(Boolean).join(' - ') };
+  S.busy = '';
+  if (out.length === 1) {                       // the barcode settled it on its own
+    S.release = out[0];
+    S.match = { transcription: 'barcode ' + read.barcode, top: 1, confidence: 92,
+                margin: 'The barcode matches exactly one release, so there is nothing to separate.',
+                deciding_character: '', next_photo: '',
+                reasoning: 'Identified from the barcode rather than the runout — no runout photograph needed.' };
+    S.stack = ['search']; return go('result', true);
+  }
+  S.stack = ['search']; go('narrow', true);
   render();
 }
 
@@ -485,12 +597,33 @@ function render() {
 
   /* ---- search ---- */
   if (S.screen === 'search') {
-    add(`<h1>Which record?</h1>`);
-    add(`<p class="note">Search for the album, then the app finds every pressing of it and works out which one you are holding.</p>`);
-    const f = el(`<form class="stack"><input id="q" type="search" placeholder="Artist and album title" value="${esc(S.query)}" enterkeyhint="search">
-      <button class="primary" type="submit">Search</button></form>`);
-    f.onsubmit = e => { e.preventDefault(); S.query = $('#q').value; doSearch(S.query); };
-    add(f);
+    add(`<h1>Point it at a record.</h1>`);
+    add(`<p class="note">Photograph the sleeve and the app works out the album, then every pressing of it, then which one you are holding. The <b>back</b> of the sleeve gives it most to go on.</p>`);
+    const cam = el(`<label class="file" style="padding:30px 16px"><b style="font-size:17px">&#128247; Scan a sleeve</b>
+      <span>front or back — it reads the title, catalogue number and barcode</span>
+      <input type="file" accept="image/*" capture="environment"></label>`);
+    cam.querySelector('input').onchange = e => { const f = e.target.files[0]; e.target.value=''; if (f) scanSleeve(f); };
+    add(cam);
+    if (S.sleeveShot && S.read) {
+      const r = S.read;
+      add(`<div class="card tonal"><div class="eyebrow">Read from the sleeve</div>
+        ${r.artist||r.title ? `<div class="t" style="margin-top:3px">${esc([r.artist,r.title].filter(Boolean).join(' — '))}</div>` : ''}
+        <div class="pills" style="margin-top:6px">
+          ${r.catno?`<span class="pill brand">${esc(r.catno)}</span>`:''}
+          ${r.country?`<span class="pill">${esc(r.country)}</span>`:''}
+          ${r.year?`<span class="pill">${esc(r.year)}</span>`:''}
+          ${r.barcode?`<span class="pill blue">barcode</span>`:''}
+          ${r.recognised_from_artwork?`<span class="pill">from the artwork</span>`:''}
+        </div></div>`);
+    }
+    const tog = el(`<button class="ghost">${S.typing ? 'Hide the search box' : 'Or type the album name'}</button>`);
+    tog.onclick = () => { S.typing = !S.typing; render(); }; add(tog);
+    if (S.typing) {
+      const f = el(`<form class="stack"><input id="q" type="search" placeholder="Artist and album title" value="${esc(S.query)}" enterkeyhint="search">
+        <button class="primary" type="submit">Search</button></form>`);
+      f.onsubmit = e => { e.preventDefault(); S.query = $('#q').value; doSearch(S.query); };
+      add(f);
+    }
     if (S.results.length) {
       add(`<div class="eyebrow" style="margin-top:6px">Results</div>`);
       S.results.forEach(r => {
@@ -531,6 +664,9 @@ function render() {
     add(ctl);
     $('#ct').onchange = e => { S.country = e.target.value; render(); };
     $('#fm').onchange = e => { S.fmt = e.target.value; render(); };
+    if (S.read && (S.read.catno || S.read.country)) add(`<div class="banner info">From your sleeve photo: ${
+      [S.read.catno ? '<b>' + esc(S.read.catno) + '</b>' : '', S.read.country ? 'made in ' + esc(S.read.country) : ''].filter(Boolean).join(' · ')
+    }${S.country ? ' — country filter set for you.' : ''}</div>`);
     add(`<p class="note">Country is on the sleeve — &ldquo;Made in&hellip;&rdquo; — and it is the single most useful filter. ${sl > S.cap ? `Only the ${S.cap} most-owned will be checked.` : ''}</p>`);
 
     if (!S.candidates.length) {
