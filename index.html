@@ -205,6 +205,9 @@ function endpoint() {
   const url = (LS.getItem('proxyUrl') || '').trim();
   return url ? { url, code: (LS.getItem('proxyCode') || '').trim() } : null;
 }
+function hasCreds() {
+  return !!endpoint() || !!(LS.getItem('anthKey') || '').trim();
+}
 async function ask(content) {
   const ep = endpoint();
   const key = (LS.getItem('anthKey') || '').trim();
@@ -955,6 +958,16 @@ function render() {
   /* ---- search ---- */
   if (S.screen === 'search') {
     add(`<div class="banner info" style="font-weight:600">An internal concept, not a Discogs product. Built to test one thing: whether a phone can tell one pressing from another.</div>`);
+    if (!hasCreds()) {
+      const w = el(`<div class="banner warn">Reading photographs is the one part that costs money, so this device needs a key first &mdash; otherwise the scan will get to the end and stop.
+        <div class="stack" style="margin-top:10px;gap:8px">
+          <button class="primary" id="setupNow" style="padding:12px">Set that up &mdash; takes a minute</button>
+          <button class="ghost" id="exNow" style="padding:12px">Or watch it work first, no key needed</button>
+        </div></div>`);
+      add(w);
+      $('#setupNow').onclick = () => go('settings');
+      $('#exNow').onclick = loadExample;
+    }
     add(`<h1>Point it at a record.</h1>`);
     add(`<p class="note">Photograph the sleeve and the app works out the album, then every pressing of it, then which one you are holding. The <b>back</b> of the sleeve gives it most to go on.</p>`);
     const live = el(`<button class="primary" style="padding:20px 16px;font-size:17px">&#128247;&nbsp; Start scanning</button>`);
