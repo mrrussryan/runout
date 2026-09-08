@@ -178,7 +178,7 @@ const LS = localStorage;
 const el = (h) => { const d = document.createElement('div'); d.innerHTML = h.trim(); return d.firstElementChild; };
 const esc = t => (t == null ? '' : String(t)).replace(/[&<>"]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
 
-const S = {                       // app state
+const S = { invited: '',                        // app state
   screen: 'search', stack: [],
   query: '', results: [], album: null,
   versions: [], country: '', fmt: 'vinyl', cap: 14, candidates: [],
@@ -958,6 +958,9 @@ function render() {
   /* ---- search ---- */
   if (S.screen === 'search') {
     add(`<div class="banner info" style="font-weight:600">An internal concept, not a Discogs product. Built to test one thing: whether a phone can tell one pressing from another.</div>`);
+    if (S.invited) {
+      add(`<div class="banner info" style="color:var(--brand)">&check; <b>Ready to scan.</b> This link set the app up for you &mdash; reading is paid for centrally, so you need no key of your own. Requests go to <span class="mono">${esc(S.invited)}</span>.</div>`);
+    }
     if (!hasCreds()) {
       const w = el(`<div class="banner warn">Reading photographs is the one part that costs money, so this device needs a key first &mdash; otherwise the scan will get to the end and stop.
         <div class="stack" style="margin-top:10px;gap:8px">
@@ -1284,6 +1287,24 @@ function render() {
     $('#pu').oninput = e => LS.setItem('proxyUrl', e.target.value.trim());
     $('#pu').onchange = e => { LS.setItem('proxyUrl', e.target.value.trim()); S.verified = ''; render(); };
     $('#pc').oninput = e => LS.setItem('proxyCode', e.target.value.trim());
+    if (hasEp) {
+      const inv = el(`<div class="card tonal"><div class="eyebrow">Invite a tester</div>
+        <div class="s">Makes a link that sets the app up for whoever taps it &mdash; endpoint and code included, so they type nothing. Send it person to person, not anywhere public.</div>
+        <button class="primary" id="mkinv" style="margin-top:10px">Copy an invite link</button>
+        <div class="s mono" id="invout" style="word-break:break-all;margin-top:8px"></div></div>`);
+      add(inv);
+      $('#mkinv').onclick = async () => {
+        const u = (LS.getItem('proxyUrl') || '').trim();
+        const c = (LS.getItem('proxyCode') || '').trim();
+        if (!u) { S.error = 'Put the endpoint URL in first.'; return render(); }
+        const q = new URLSearchParams({ ep: u }); if (c) q.set('code', c);
+        const link = location.origin + location.pathname + '#' + q.toString();
+        let said = 'Copied. Paste it into a direct message.';
+        try { await navigator.clipboard.writeText(link); }
+        catch (e) { said = 'Could not reach the clipboard &mdash; copy it by hand:'; }
+        $('#invout').innerHTML = said + '<br>' + esc(link);
+      };
+    }
     const k = el(`<div class="card"><div class="eyebrow">Or your own Anthropic key</div>
       <input id="key" type="password" placeholder="sk-ant-…" value="${esc(LS.getItem('anthKey') || '')}" autocomplete="off">
       <div class="s" id="keysaved" style="color:var(--brand);font-weight:700">${savedKey ? 'Saved on this device' : ''}</div>
@@ -1327,6 +1348,32 @@ if ('serviceWorker' in navigator) {
       .catch(() => {});
   });
 }
+// An invite link carries the shared endpoint in the URL *fragment* (after the #).
+// A fragment is never sent to a web server, never written to a server log and
+// never passed on in a Referer header, so the access code does not leak the way
+// a ?query=  would. It is read once, saved to this device, then wiped from the
+// address bar so it does not sit in the browser history.
+(function readInvite() {
+  const h = location.hash || '';
+  if (h.length < 4) return;
+  const q = new URLSearchParams(h.slice(1));
+  const url = (q.get('ep') || '').trim();
+  const code = (q.get('code') || '').trim();
+  if (!url) return;
+  history.replaceState(null, '', location.pathname + location.search);
+  let host;
+  try {
+    const u = new URL(url);
+    if (u.protocol !== 'https:') throw new Error('not https');
+    host = u.host;
+  } catch (e) {
+    S.error = 'That invite link is not a valid https endpoint, so nothing was saved.';
+    return;
+  }
+  LS.setItem('proxyUrl', url);
+  LS.setItem('proxyCode', code);
+  S.invited = host;
+})();
 render();
 </script>
 </html>

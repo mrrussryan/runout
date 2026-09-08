@@ -1,42 +1,78 @@
-// Optional shared endpoint for Runout.
+// Shared endpoint for Runout.
 //
-// Deploy this once and testers need no API key of their own: the key lives here,
-// server-side, and never reaches the browser. Without it, each person has to
-// paste their own key into the app's settings.
+// Deploy this once and your testers need no API key of their own: your key
+// lives here, server-side, and never reaches anybody's browser.
 //
-//   1. cloudflare.com → Workers & Pages → Create Worker → paste this
-//   2. Settings → Variables:
-//        ANTHROPIC_API_KEY  = sk-ant-…            (encrypted)
-//        APP_PASSWORD       = any phrase you like  (encrypted)
+//   1. cloudflare.com -> Workers & Pages -> Create Worker -> paste this in
+//   2. Settings -> Variables and Secrets, add both as SECRET (encrypted):
+//        ANTHROPIC_API_KEY  = sk-ant-...
+//        APP_PASSWORD       = any phrase you like
+//      and optionally, as a plain variable:
+//        ALLOWED_ORIGIN     = https://mrrussryan.github.io
 //   3. Deploy, copy the worker URL
-//   4. In the app: cog → Shared endpoint = that URL, Access code = APP_PASSWORD
+//   4. In the app: cog -> Shared endpoint = that URL, Access code = APP_PASSWORD,
+//      then "Copy an invite link" and send that to your testers.
 //
-// The password matters. Without it the URL is an open relay and anyone who
-// finds it spends your credit.
+// Guard rails, because the app itself is on a public link:
+//   - APP_PASSWORD is required. Without it the URL is an open relay.
+//   - ALLOWED_ORIGIN means the endpoint only answers the app, so somebody who
+//     finds the URL cannot point their own code at it.
+//   - The model and token ceiling are pinned here, so it cannot be borrowed as
+//     a general-purpose Claude proxy even by someone holding the password.
+//   - Set a spend cap at platform.claude.com/settings/limits as the hard floor
+//     under all of the above.
 
-const CORS = {
-  'Access-Control-Allow-Origin': '*',
+const MODEL = 'claude-opus-5';
+const MAX_TOKENS = 16000;
+const MAX_BODY = 12 * 1024 * 1024;
+
+const cors = origin => ({
+  'Access-Control-Allow-Origin': origin || '*',
   'Access-Control-Allow-Headers': 'content-type,x-app-password',
-  'Access-Control-Allow-Methods': 'POST,OPTIONS'
-};
-const json = (obj, status = 200) =>
-  new Response(JSON.stringify(obj), { status, headers: { 'content-type': 'application/json', ...CORS } });
+  'Access-Control-Allow-Methods': 'POST,OPTIONS',
+  'Vary': 'Origin'
+});
+const json = (obj, status, origin) =>
+  new Response(JSON.stringify(obj), {
+    status,
+    headers: { 'content-type': 'application/json', ...cors(origin) }
+  });
+const nope = (msg, status, origin) => json({ error: { message: msg } }, status, origin);
 
 export default {
   async fetch(request, env) {
-    if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
-    if (request.method !== 'POST') return json({ error: { message: 'POST only' } }, 405);
+    const origin = request.headers.get('Origin') || '';
+    const allowed = (env.ALLOWED_ORIGIN || '').trim();
+    const ok = !allowed || origin === allowed;
 
-    if (env.APP_PASSWORD && request.headers.get('x-app-password') !== env.APP_PASSWORD)
-      return json({ error: { message: 'Wrong access code for this endpoint.' } }, 401);
+    if (request.method === 'OPTIONS')
+      return new Response(null, { status: 204, headers: cors(ok ? origin : allowed) });
+    if (!ok) return nope('This endpoint only answers the Runout app.', 403, allowed);
+    if (request.method !== 'POST') return nope('POST only.', 405, origin);
 
+    if (!env.APP_PASSWORD)
+      return nope('This endpoint has no APP_PASSWORD set, so it is refusing to run.', 500, origin);
+    if (request.headers.get('x-app-password') !== env.APP_PASSWORD)
+      return nope('Wrong access code for this endpoint.', 401, origin);
     if (!env.ANTHROPIC_API_KEY)
-      return json({ error: { message: 'This endpoint has no ANTHROPIC_API_KEY set.' } }, 500);
+      return nope('This endpoint has no ANTHROPIC_API_KEY set.', 500, origin);
+
+    const raw = await request.text().catch(() => null);
+    if (raw === null) return nope('Unreadable body.', 400, origin);
+    if (raw.length > MAX_BODY) return nope('Request too large.', 413, origin);
 
     let body;
-    try { body = await request.text(); } catch { return json({ error: { message: 'Bad body' } }, 400); }
-    if (body.length > 12 * 1024 * 1024)
-      return json({ error: { message: 'Request too large.' } }, 413);
+    try { body = JSON.parse(raw); } catch { return nope('Body is not JSON.', 400, origin); }
+    if (!Array.isArray(body.messages) || !body.messages.length)
+      return nope('No messages in the request.', 400, origin);
+
+    // Pin the expensive knobs so this cannot become a general-purpose proxy.
+    const safe = {
+      model: MODEL,
+      max_tokens: Math.min(Number(body.max_tokens) || MAX_TOKENS, MAX_TOKENS),
+      thinking: body.thinking && body.thinking.type === 'adaptive' ? body.thinking : undefined,
+      messages: body.messages
+    };
 
     const upstream = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -45,11 +81,11 @@ export default {
         'x-api-key': env.ANTHROPIC_API_KEY,
         'anthropic-version': '2023-06-01'
       },
-      body
+      body: JSON.stringify(safe)
     });
     return new Response(upstream.body, {
       status: upstream.status,
-      headers: { 'content-type': 'application/json', ...CORS }
+      headers: { 'content-type': 'application/json', ...cors(origin) }
     });
   }
 };

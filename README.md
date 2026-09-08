@@ -26,6 +26,19 @@ For reading photographs, yes — something has to pay for that. Two ways:
   other people.
 - **Your own key**, pasted into settings, kept in that browser only.
 
+### Handing it to testers
+
+Once the shared endpoint is set up, open the cog and press **Copy an invite
+link**. That produces a link carrying the endpoint and the access code in the
+URL *fragment* (after the `#`). A fragment is never sent to a web server, never
+written to a server log and never forwarded in a `Referer` header, so the code
+does not leak the way a `?query=` would. Whoever taps it has a configured app
+and types nothing; the app then wipes the fragment out of the address bar so it
+does not linger in their history.
+
+Send invite links person to person. The bare link stays unconfigured on purpose,
+so somebody who stumbles across the site cannot spend anything.
+
 Everything else needs nothing: searching, every version of an album, the
 runouts recorded for each, prices, cover art, and the worked example all come
 from the public Discogs API with no token at all.

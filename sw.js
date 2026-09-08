@@ -4,7 +4,7 @@
 // a cache-first document would pin whoever already opened the link to an old
 // version forever. Everything else is cache-first for speed. API traffic is
 // never touched.
-const SHELL = 'runout-shell-v4';
+const SHELL = 'runout-shell-v5';
 const FILES = ['./', './index.html', './manifest.webmanifest', './icon.svg', './icon-192.png'];
 
 self.addEventListener('install', e => {
