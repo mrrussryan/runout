@@ -447,7 +447,7 @@ const STEPS = [
   { key:'back',   label:'Sleeve back',  shape:'sq',
     hint:'Show the back — this is where the catalogue number is.' },
   { key:'runout', label:'Runout matrix', shape:'band',
-    hint:'Torch on. Get close and lay the band along the scratched writing, following the curve.' }
+    hint:'Light from the SIDE, torch off. Tilt the record until the etching glints, then lay the band along it.' }
 ];
 const stepIndex = key => STEPS.findIndex(x => x.key === key);
 const L = {                      // live-scanner runtime (not part of the saved state)
@@ -457,7 +457,9 @@ const L = {                      // live-scanner runtime (not part of the saved 
 };
 
 async function startLive() {
-  S.error = ''; go('scan');
+  S.error = '';
+  stopLive();                      // never build on top of a previous session
+  go('scan');
   try {
     L.stream = await navigator.mediaDevices.getUserMedia({
       video: { facingMode: { ideal: 'environment' },
@@ -479,11 +481,31 @@ async function startLive() {
   } catch (e) { /* a camera that reports nothing is not an error */ }
   L.step = 0; L.samples = 0; L.frames = {}; L.msg = ''; L.best = 0; L.stepStart = performance.now();
   L.bcDone = false; L.bcBusy = false; L.barcodeHits = null;
+  // A scan that ended mid-read used to leave this true, which killed every later
+  // scan silently: the loop skips while reading, and so does the manual button.
+  L.reading = false; L.lastScore = null; L.dead = false; L.waited = 0;
   L.checks = { barcode:null, front:null, back:null, catno:null, runout:null };
   render();
   const v = $('#feed');
-  if (v) { v.srcObject = L.stream; v.play().catch(()=>{}); }
+  if (v) { v.srcObject = L.stream; L.video = v; v.play().catch(()=>{}); }
+  await waitForFrame();
   loop();
+}
+
+// A <video> reports videoWidth 0 until the first frame has decoded. Starting the
+// read loop before that means every tick bails out at the dimension check, which
+// looks exactly like a frozen scanner. Wait for real dimensions, and say so if
+// they never arrive rather than sitting there.
+async function waitForFrame(ms) {
+  const limit = ms || 6000, t0 = performance.now();
+  while (performance.now() - t0 < limit) {
+    const v = L.video || $('#feed');
+    if (v && v.videoWidth > 0) { L.video = v; return true; }
+    await new Promise(r => setTimeout(r, 120));
+  }
+  S.error = 'The camera opened but sent no picture. Close the tab and reopen the link, or use the photograph option instead.';
+  render();
+  return false;
 }
 
 function stopLive() {
@@ -541,6 +563,100 @@ function reticleCrop(pad) {
   w = Math.min(w, vw - x); h = Math.min(h, vh - y);
   if (w < 40 || h < 40) return null;
   return { x, y, w, h };
+}
+
+// ---------------------------------------------------------------------------
+// Runout enhancement.
+//
+// A runout is fine scratches in a mirror. Point any light at it and most of the
+// frame comes back as one broad specular wash with the etching hidden inside it.
+// The etching IS in the pixels; it is just swamped by a slow brightness gradient
+// hundreds of pixels wide, while the marks themselves are two or three pixels.
+//
+// So: separate the two by spatial scale. Blur the frame heavily to model the
+// glare, subtract that from the original, and what is left is the fine detail
+// with the wash removed. Then stretch what remains to fill the range. This is
+// the standard flat-field / high-pass correction and it is exactly the right
+// tool here — no model call, no cost, runs in about 60ms on a phone.
+// ---------------------------------------------------------------------------
+function boxBlurGray(src, w, h, r) {
+  const tmp = new Float32Array(w * h), out = new Float32Array(w * h);
+  for (let y = 0; y < h; y++) {                       // horizontal pass
+    let sum = 0; const row = y * w;
+    for (let x = -r; x <= r; x++) sum += src[row + Math.min(w - 1, Math.max(0, x))];
+    for (let x = 0; x < w; x++) {
+      tmp[row + x] = sum / (2 * r + 1);
+      sum -= src[row + Math.min(w - 1, Math.max(0, x - r))];
+      sum += src[row + Math.min(w - 1, Math.max(0, x + r + 1))];
+    }
+  }
+  for (let x = 0; x < w; x++) {                       // vertical pass
+    let sum = 0;
+    for (let y = -r; y <= r; y++) sum += tmp[Math.min(h - 1, Math.max(0, y)) * w + x];
+    for (let y = 0; y < h; y++) {
+      out[y * w + x] = sum / (2 * r + 1);
+      sum -= tmp[Math.min(h - 1, Math.max(0, y - r)) * w + x];
+      sum += tmp[Math.min(h - 1, Math.max(0, y + r + 1)) * w + x];
+    }
+  }
+  return out;
+}
+
+// Returns { data (base64 jpeg), score } — score is how much fine detail survived,
+// which is what we use to choose between frames.
+function enhanceRunout(canvas) {
+  const w = canvas.width, h = canvas.height;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  const im = ctx.getImageData(0, 0, w, h), d = im.data;
+  const gray = new Float32Array(w * h);
+  for (let i = 0, p = 0; i < d.length; i += 4, p++)
+    gray[p] = d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114;
+
+  // radius scaled to the frame: big enough to model glare, not the strokes
+  const r = Math.max(6, Math.round(Math.min(w, h) / 22));
+  const bg = boxBlurGray(gray, w, h, r);
+
+  const hp = new Float32Array(w * h);
+  let lo = 1e9, hi = -1e9, energy = 0;
+  for (let i = 0; i < hp.length; i++) {
+    const v = gray[i] - bg[i];               // glare removed
+    hp[i] = v; energy += Math.abs(v);
+    if (v < lo) lo = v; if (v > hi) hi = v;
+  }
+  // stretch on percentiles, so a couple of hot pixels cannot flatten everything
+  const sorted = Float32Array.from(hp).sort();
+  const p2 = sorted[Math.floor(sorted.length * 0.02)];
+  const p98 = sorted[Math.floor(sorted.length * 0.98)];
+  const span = Math.max(1, p98 - p2);
+  for (let i = 0, p = 0; i < d.length; i += 4, p++) {
+    let v = (hp[p] - p2) / span * 255;
+    v = v < 0 ? 0 : v > 255 ? 255 : v;
+    d[i] = d[i + 1] = d[i + 2] = v; d[i + 3] = 255;
+  }
+  ctx.putImageData(im, 0, 0);
+  return { data: canvas.toDataURL('image/jpeg', 0.92).split(',')[1],
+           score: energy / hp.length };
+}
+
+// Glare moves as the hand moves, so three frames a moment apart are not the same
+// frame. Take three, enhance each, and keep whichever kept the most fine detail.
+async function bestRunoutFrame(crop) {
+  const v = L.video || $('#feed');
+  if (!v || !v.videoWidth) return null;
+  let best = null;
+  for (let i = 0; i < 3; i++) {
+    const src = crop || { x: 0, y: 0, w: v.videoWidth, h: v.videoHeight };
+    const sc = Math.min(1, 1600 / Math.max(src.w, src.h));
+    const c = document.createElement('canvas');
+    c.width = Math.round(src.w * sc); c.height = Math.round(src.h * sc);
+    c.getContext('2d').drawImage(v, src.x, src.y, src.w, src.h, 0, 0, c.width, c.height);
+    const raw = c.toDataURL('image/jpeg', 0.9).split(',')[1];
+    const en = enhanceRunout(c);                     // mutates c, so raw is taken first
+    if (!best || en.score > best.score) best = { raw, enhanced: en.data, score: en.score };
+    if (i < 2) await new Promise(r => setTimeout(r, 220));
+  }
+  L.lastScore = best ? best.score : 0;
+  return best;
 }
 
 // max caps the LONG side of what we send. Cropping first means those pixels are
@@ -609,10 +725,9 @@ async function resolveBarcode(code) {
       return fromBarcode(hits, S.read || {});
     }
     L.barcodeHits = hits;
-    L.msg = hits.length + ' releases share that barcode — the runout will separate them.';
-    const ri = stepIndex('runout');
-    if (L.step < ri) { L.step = ri; L.samples = 0; L.best = 0; L.stepStart = performance.now(); }
-    render();
+    L.msg = hits.length + ' releases share that barcode \u2014 pick yours.';
+    render(); stopLive();
+    return fromBarcode(hits, S.read || {});
   } catch (e) { L.msg = e.message; render(); }
 }
 
@@ -691,6 +806,13 @@ async function setZoom(n) {
   catch (e) { /* a camera that will not zoom is not an error */ }
 }
 
+// Update the on-screen hint without a re-render, so the live <video> survives.
+function say(msg) {
+  L.msg = msg;
+  const h = document.querySelector('.vp-hint');
+  if (h) h.textContent = msg;
+}
+
 async function readStep() {
   const step = STEPS[L.step]; if (!step) return;
   // With no key and no shared endpoint there is nothing to pay for a read, so do
@@ -706,13 +828,36 @@ async function readStep() {
   // On the runout the target is a couple of centimetres of etched metal. Send the
   // reticle patch rather than the whole frame, or the characters arrive too small
   // to read at any resolution.
-  const b = (step.key === 'runout' || step.key === 'barcode')
-    ? grabFrame(1600, reticleCrop(0.10))
-    : grabFrame();
-  if (!b) return;
-  L.reading = true; L.samples++; L.msg = ''; render();
+  L.reading = true; L.samples++;
+  // Never call render() between here and the frame grab: render() rebuilds the
+  // <video> element, the new one has no dimensions for a moment, and the grab
+  // then fails every single time round the loop. Write to the hint in place.
+  say('Working\u2026');
+  let content, b;
   try {
-    const a = await ask([img(b), { type: 'text', text: PROMPTS[step.key] }]);
+    if (step.key === 'runout') {
+      say('Three frames, stripping the glare\u2026');
+      const pair = await bestRunoutFrame(reticleCrop(0.10));
+      if (!pair) { L.reading = false; L.samples--; return; }
+      b = pair.raw; L.frames.runout = pair.raw;
+      // Both views in one read: the processed frame usually shows the strokes,
+      // the plain one is there in case the processing ate something.
+      content = [img(pair.enhanced), img(pair.raw), { type: 'text', text: PROMPTS.runout }];
+    } else {
+      b = (step.key === 'barcode')
+        ? grabFrame(1600, reticleCrop(0.10))
+        : grabFrame();
+      if (!b) { L.reading = false; L.samples--; return; }
+      content = [img(b), { type: 'text', text: PROMPTS[step.key] }];
+    }
+  } catch (e) {
+    // A failure while preparing the frame must not leave the scanner "reading"
+    // for ever, which is what stalls it silently.
+    L.reading = false; L.msg = 'Could not prepare that frame: ' + e.message; render(); return;
+  }
+  render();
+  try {
+    const a = await ask(content);
     if (a.usable) {
       L.frames[step.key] = b;
       if (step.key === 'front')  { L.checks.front  = [a.artist, a.title].filter(Boolean).join(' — ') || 'cover captured'; }
@@ -767,7 +912,12 @@ Set usable true only if you can read the full run of digits with confidence. If 
 Return the digits only, no spaces.
 JSON only: {"usable":<bool>,"barcode":"the digits, or empty","why":"if not usable, what to change in under 10 words"}`,
   runout:
-`This is a close-up camera frame of the RUNOUT MATRIX — the code in the smooth dead wax between the last groove and the label of a vinyl record.
+`You are given TWO pictures of the same thing, taken a moment apart from a phone.
+The FIRST has been processed on the device to remove reflection: the broad glare has been subtracted and the fine detail stretched to fill the range, so the etched strokes should stand out as light marks on grey. It may look harsh or noisy — that is expected, and it is usually the one to read.
+The SECOND is the untouched frame, for context and for anything the processing may have removed.
+Read whichever shows the characters more clearly, and cross-check one against the other. If they disagree, trust the clearer one and lower your confidence.
+
+Both show the RUNOUT MATRIX — the code in the smooth dead wax between the last groove and the label of a vinyl record.
 Expect it to be hard to read, and read it anyway if you can:
 - It follows the CURVE of the disc, so the characters arc across the frame and each one may sit at a slightly different angle.
 - Much of it is cut BY HAND with a stylus, so strokes are uneven, thin, scratchy and irregularly spaced. Machine-stamped ones are neater. Both are normal.
@@ -797,6 +947,7 @@ async function prefetchAlbum() {
 }
 
 async function finishLive() {
+  L.reading = false;
   L.msg = 'Everything captured.'; render();
   stopLive();
   if (L.barcodeHits) return fromBarcode(L.barcodeHits, S.read || {});
@@ -897,7 +1048,12 @@ async function fromBarcode(hits, read) {
                 reasoning: 'Identified from the barcode rather than the runout — no runout photograph needed.' };
     S.stack = ['search']; return go('result', true);
   }
-  S.stack = ['search']; go('narrow', true);
+  // A barcode that covers a handful of releases is a job for a human eye before a
+  // runout photograph: sleeve, country and format usually tell them apart at a
+  // glance. Only offer the runout when they genuinely look the same.
+  S.stack = ['search'];
+  if (out.length > 1 && out.length <= 12) return go('pick', true);
+  go('narrow', true);
   render();
 }
 
@@ -1061,7 +1217,7 @@ Reply with JSON only:
 <script>
 'use strict';
 /* ================= render ================= */
-const TITLES = { search:'Runout', scan:'Scanning', capture1:'Photograph the sleeve', narrow:'Narrow it down', capture:'Photograph the runout',
+const TITLES = { pick: 'Which pressing?', search:'Runout', scan:'Scanning', capture1:'Photograph the sleeve', narrow:'Narrow it down', capture:'Photograph the runout',
                  result:'Identify', condition:'Condition', summary:'Ready to list', settings:'Settings' };
 
 function relCard(c, cls) {
@@ -1395,6 +1551,36 @@ function render() {
     const s = el(`<div class="sticky"><button class="ghost">Wrong match</button><button class="primary">Right — next record</button></div>`);
     s.children[0].onclick = () => logResult(false);
     s.children[1].onclick = () => logResult(true); add(s);
+  }
+
+  /* ---- pick between releases that share a barcode ---- */
+  if (S.screen === 'pick') {
+    const n = S.candidates.length;
+    add(`<h1>${n} pressings share that barcode</h1>`);
+    add(`<p class="note">The barcode got it down to ${n}. Look at the sleeve, the country and the format and pick the one in your hands \u2014 that is usually obvious, and it costs nothing.</p>`);
+    if (S.read && S.read.barcode)
+      add(`<div class="banner info">Barcode <span class="mono">${esc(S.read.barcode)}</span></div>`);
+    S.candidates.forEach(c => {
+      const card = el(`<div class="card tap">${relCard(c)}
+        <div class="pills" style="margin-top:8px">
+          ${c.forSale ? `<span class="pill">${c.forSale} for sale</span>` : ''}
+          ${c.lowest ? `<span class="pill">from ${esc(String(c.lowest))}</span>` : ''}
+          ${c.runouts && c.runouts.length ? `<span class="pill brand">${c.runouts.length} runout${c.runouts.length>1?'s':''} on file</span>` : ''}
+        </div></div>`);
+      card.onclick = () => {
+        S.release = c;
+        S.match = { transcription: 'barcode ' + ((S.read||{}).barcode || ''), top: 1, confidence: 88,
+                    margin: 'Chosen by you from the ' + n + ' releases sharing this barcode.',
+                    deciding_character: '', next_photo: '',
+                    reasoning: 'The barcode narrowed it to ' + n + '; you picked this one from the sleeve.' };
+        go('result', true);
+      };
+      add(card);
+    });
+    const alt = el(`<button class="ghost">These look the same \u2014 use the runout to decide</button>`);
+    alt.onclick = () => { S.shots = []; go('capture'); };
+    add(alt);
+    add(`<p class="note">The runout is the only thing that separates two pressings that look identical. It is also the hardest thing to photograph, so it is worth a look with your own eyes first.</p>`);
   }
 
   /* ---- settings ---- */
