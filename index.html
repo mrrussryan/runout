@@ -601,6 +601,16 @@ function tick() {
 
 async function readStep() {
   const step = STEPS[L.step]; if (!step) return;
+  // With no key and no shared endpoint there is nothing to pay for a read, so do
+  // not start one just to fail. The barcode sniffer is on-device and free, and on
+  // a modern record it is often enough on its own — keep looking for one instead.
+  if (!hasCreds()) {
+    L.msg = bcReady
+      ? 'No key on this device, so it is looking for a barcode only — that part is free. A record without one needs a key.'
+      : 'This device has no key, and this browser cannot read barcodes on its own. Open the cog to set one up.';
+    render();
+    return;
+  }
   const b = grabFrame(); if (!b) return;
   L.reading = true; L.samples++; L.msg = ''; render();
   try {
