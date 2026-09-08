@@ -223,9 +223,7 @@ async function ask(content) {
   const j = await r.json();
   if (j.type === 'error') throw new Error(j.error.message);
   const text = (j.content || []).filter(b => b.type === 'text').map(b => b.text).join('');
-  const m = text.match(/\{[\s\S]*\}/);
-  if (!m) throw new Error('Unexpected reply: ' + text.slice(0, 180));
-  return JSON.parse(m[0]);
+  return parseJson(text);
 }
 // A cheap live call to prove the credentials actually work, and to surface the
 // real error when they do not.
@@ -253,6 +251,20 @@ async function testCredentials() {
     throw new Error(m);
   }
   return { via: ep ? 'shared endpoint' : 'your own key', model: j.model || 'claude-opus-5' };
+}
+
+// The reply should be JSON only, but models sometimes wrap it in a sentence.
+// Walk inwards from the outermost braces until something actually parses.
+function parseJson(text) {
+  const first = text.indexOf('{'), last = text.lastIndexOf('}');
+  if (first < 0 || last <= first) throw new Error('Unexpected reply: ' + text.slice(0, 180));
+  for (let end = last; end > first; end = text.lastIndexOf('}', end - 1)) {
+    try { return JSON.parse(text.slice(first, end + 1)); } catch (e) { /* try a shorter tail */ }
+  }
+  for (let start = first; start < last; start = text.indexOf('{', start + 1)) {
+    try { return JSON.parse(text.slice(start, last + 1)); } catch (e) { /* try a later head */ }
+  }
+  throw new Error('Could not read the reply as JSON: ' + text.slice(0, 180));
 }
 
 const img = b => ({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: b } });
@@ -701,12 +713,25 @@ async function fromBarcode(hits, read) {
 }
 
 /* ---- identify ---- */
+// Some releases have forty-odd transcribed variants. Sending them all triples the
+// cost of a read for almost no extra signal, so dedupe and keep a sensible spread.
+const RUNOUT_CAP = 12;
+function trimRunouts(rs) {
+  const seen = new Set(), out = [];
+  for (const r of rs) {
+    const k = (r.v || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (!k || seen.has(k)) continue;
+    seen.add(k); out.push(r);
+    if (out.length >= RUNOUT_CAP) break;
+  }
+  return out;
+}
 function candidateList(list) {
   return list.map((c, i) =>
     '[' + (i + 1) + '] release ' + c.id + ' — ' + (c.catno || 'no cat#') + ' · ' +
     [c.format, c.country, c.year].filter(Boolean).join(' · ') +
     (c.owned ? ' · ' + c.owned.toLocaleString() + ' copies owned' : '') +
-    '\n      runouts on file: ' + c.runouts.map(r => '"' + r.v + '"' + (r.d ? ' (' + r.d + ')' : '')).join(' | ')
+    '\n      runouts on file: ' + trimRunouts(c.runouts).map(r => '"' + r.v + '"' + (r.d ? ' (' + r.d + ')' : '')).join(' | ')
   ).join('\n');
 }
 const RULES =
@@ -962,8 +987,13 @@ function render() {
           ? `<div class="mono" style="color:var(--ink2);margin-top:6px">${c.runouts.slice(0,2).map(r=>esc(r.v)).join('<br>')}${c.runouts.length>2?`<br>+ ${c.runouts.length-2} more`:''}</div>`
           : `<div class="s" style="margin-top:6px">No runout on file</div>`}</div>`));
       if (withR >= 2) {
-        const s = el(`<div class="sticky"><button class="primary">Photograph the runout</button></div>`);
-        s.firstElementChild.onclick = () => go('capture'); add(s);
+        const got = S.shots.length > 0;
+        const s = el(`<div class="sticky">${got ? '<button class="ghost">Retake</button>' : ''}
+          <button class="primary">${got ? 'Identify the pressing' : 'Photograph the runout'}</button></div>`);
+        if (got) s.children[0].onclick = () => { S.shots = []; go('capture'); };
+        s.lastElementChild.onclick = () => got ? identify() : go('capture');
+        add(s);
+        if (got) add(`<p class="note" style="text-align:center">Using the runout photo from the scan.</p>`);
       }
     }
   }
