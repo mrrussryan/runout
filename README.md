@@ -26,9 +26,11 @@ prices and cover art all come from the public API.
 
 ## What it does
 
-1. Photograph the sleeve. It reads the artist, title, catalogue number, barcode
-   and country of manufacture, then finds the album (a barcode goes straight to
-   the pressings that carry it). Typing the album name is still there as a fallback.
+1. Start scanning. The camera stays live and works through a checklist —
+   sleeve front, sleeve back, catalogue number, runout matrix — ticking each one
+   off as it gets what it needs and telling you what to change when it cannot.
+   Frames are graded for sharpness on the device, so a read is only spent on a
+   picture worth reading. A single photo, or typing the album name, are fallbacks.
 2. Filter to a country and format; load the runouts recorded for each version
 3. Photograph the runout matrix (torch on, low angle, 2–3 frames)
 4. Rank the candidates, with a confidence and the margin over the runner-up

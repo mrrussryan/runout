@@ -122,6 +122,35 @@ details>div{padding:0 14px 14px;display:flex;flex-direction:column;gap:10px}
   padding:12px 0 calc(4px + var(--safe-b));margin-top:auto;display:flex;gap:8px}
 .sticky>*{flex:1}
 a{color:var(--blue)}
+
+/* live scanner */
+.viewport{position:relative;border-radius:var(--rc);overflow:hidden;background:#0B0C0D;aspect-ratio:3/4}
+.viewport video{width:100%;height:100%;object-fit:cover;display:block}
+.vp-overlay{position:absolute;inset:0;pointer-events:none}
+.reticle{position:absolute;border:2px solid rgba(255,255,255,.92);border-radius:10px;
+  box-shadow:0 0 0 2000px rgba(0,0,0,.34);transition:all .35s ease}
+.reticle.sq{inset:14% 8% auto 8%;aspect-ratio:1/1}
+.reticle.ring{inset:12% 14%;border-radius:50%;aspect-ratio:1/1}
+.reticle.on{border-color:#3ddc84;box-shadow:0 0 0 2000px rgba(0,0,0,.34),0 0 14px rgba(61,220,132,.7)}
+.vp-hint{position:absolute;left:0;right:0;bottom:0;padding:12px 14px 14px;color:#fff;max-height:4.4em;overflow:hidden;
+  background:linear-gradient(to top,rgba(0,0,0,.72),transparent);font-size:13px;font-weight:600;line-height:1.4;text-align:center}
+.vp-top{position:absolute;top:0;left:0;right:0;padding:10px 12px;display:flex;gap:8px;align-items:center;
+  background:linear-gradient(to bottom,rgba(0,0,0,.6),transparent)}
+.vp-step{color:#fff;font-size:11.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase}
+.vp-live{margin-left:auto;display:flex;align-items:center;gap:5px;color:#fff;font-size:10.5px;font-weight:700}
+.vp-live i{width:7px;height:7px;border-radius:50%;background:#3ddc84;display:block;animation:pulse 1.4s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:.35}50%{opacity:1}}
+.vp-busy{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);color:#fff;font-size:12px;font-weight:700;background:rgba(0,0,0,.62);padding:8px 14px;border-radius:999px;white-space:nowrap;backdrop-filter:blur(2px)}
+.checks{display:flex;flex-direction:column;gap:1px;background:var(--line);border:1px solid var(--line);border-radius:var(--rc);overflow:hidden}
+.checks div{background:#fff;padding:11px 13px;display:flex;align-items:center;gap:10px;font-size:13.5px;font-weight:700}
+.checks div.done{background:var(--brandbg)}
+.checks div.now{background:var(--warnbg)}
+.checks b{width:20px;height:20px;border-radius:50%;flex:none;display:flex;align-items:center;justify-content:center;
+  font-size:11px;background:var(--tonal);color:var(--ink3)}
+.checks div.done b{background:var(--brand);color:#fff}
+.checks div.now b{background:var(--warn);color:#fff}
+.checks span{margin-left:auto;font-size:11.5px;font-weight:600;color:var(--ink2);text-align:right;max-width:52%}
+.shutter{width:64px;height:64px;border-radius:50%;background:#fff;border:4px solid var(--ink);padding:0;margin:0 auto;display:block}
 </style>
 
 <div class="app">
@@ -228,8 +257,10 @@ async function addShots(input, bucket, max) {
 }
 
 /* ---------------- nav ---------------- */
-function go(screen, keep) { if (!keep) S.stack.push(S.screen); S.screen = screen; S.busy=''; window.scrollTo(0,0); render(); }
-function back() { S.screen = S.stack.pop() || 'search'; S.busy=''; render(); }
+function go(screen, keep) { if (S.screen === 'scan' && screen !== 'scan') stopLive();
+  if (!keep) S.stack.push(S.screen); S.screen = screen; S.busy=''; window.scrollTo(0,0); render(); }
+function back() { if (S.screen === 'scan') stopLive();
+  S.screen = S.stack.pop() || 'search'; S.busy=''; render(); }
 $('#back').onclick = back;
 $('#gear').onclick = () => go('settings');
 
@@ -332,6 +363,208 @@ async function loadRunouts() {
   if (withR === 0) S.error = 'None of these has a runout recorded, so there is nothing to match a photo against. This is the 56% gap — you can still list it by hand, and a scan would be a genuine contribution.';
   else if (withR === 1) S.error = 'Only one of these has a runout on file, so a photo cannot separate them.';
   render();
+}
+
+/* ================= live scanner =================
+   A live feed with a checklist. Frames are graded on-device for sharpness so a
+   model read is only spent when the picture is actually worth reading. */
+const STEPS = [
+  { key:'front',  label:'Sleeve front', shape:'sq',
+    hint:'Fill the frame with the front cover.' },
+  { key:'back',   label:'Sleeve back',  shape:'sq',
+    hint:'Show the back — this is where the catalogue number and barcode are.' },
+  { key:'runout', label:'Runout matrix', shape:'ring',
+    hint:'Torch on. Tilt the record so the light skims across the dead wax.' }
+];
+const L = {                      // live-scanner runtime (not part of the saved state)
+  stream:null, track:null, video:null, raf:0, timer:0,
+  step:0, samples:0, lastSample:0, reading:false, sharp:0, torch:false,
+  frames:{}, checks:{ front:null, back:null, catno:null, runout:null }, msg:''
+};
+
+async function startLive() {
+  S.error = ''; go('scan');
+  try {
+    L.stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1440 } },
+      audio: false
+    });
+  } catch (e) {
+    S.error = 'The camera could not be opened (' + (e.name || 'unknown') + '). On iPhone this needs Safari and a tap to allow access. You can still photograph each part instead.';
+    S.screen = 'capture'; return render();
+  }
+  L.track = L.stream.getVideoTracks()[0];
+  L.step = 0; L.samples = 0; L.frames = {}; L.msg = ''; L.best = 0; L.stepStart = performance.now();
+  L.checks = { front:null, back:null, catno:null, runout:null };
+  render();
+  const v = $('#feed');
+  if (v) { v.srcObject = L.stream; v.play().catch(()=>{}); }
+  loop();
+}
+
+function stopLive() {
+  cancelAnimationFrame(L.raf); clearInterval(L.timer); clearTimeout(L.timer);
+  if (L.stream) L.stream.getTracks().forEach(t => t.stop());
+  L.stream = null; L.track = null; L.torch = false;
+}
+
+async function toggleTorch() {
+  if (!L.track) return;
+  try {
+    const caps = L.track.getCapabilities ? L.track.getCapabilities() : {};
+    if (!caps.torch) { L.msg = 'This browser will not let a web page control the torch — turn it on from the Control Centre and come back.'; return render(); }
+    L.torch = !L.torch;
+    await L.track.applyConstraints({ advanced: [{ torch: L.torch }] });
+    render();
+  } catch (e) { L.msg = 'Could not switch the torch on.'; render(); }
+}
+
+/* how sharp is the current frame? cheap on-device gate before spending a read */
+function sharpness(v) {
+  const w = 140, h = Math.round(w * (v.videoHeight || 3) / (v.videoWidth || 4));
+  const c = sharpness.c || (sharpness.c = document.createElement('canvas'));
+  c.width = w; c.height = h;
+  const g = c.getContext('2d', { willReadFrequently: true });
+  g.drawImage(v, 0, 0, w, h);
+  const d = g.getImageData(0, 0, w, h).data;
+  let sum = 0, n = 0;
+  for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
+    const i = (y * w + x) * 4;
+    const p = d[i] * .299 + d[i+1] * .587 + d[i+2] * .114;
+    const r = d[i+4] * .299 + d[i+5] * .587 + d[i+6] * .114;
+    const b = d[i + w*4] * .299 + d[i + w*4+1] * .587 + d[i + w*4+2] * .114;
+    sum += Math.abs(p - r) + Math.abs(p - b); n++;
+  }
+  return n ? sum / n : 0;
+}
+
+function grabFrame(max) {
+  const v = L.video || $('#feed');
+  if (!v || !v.videoWidth) return null;
+  const sc = Math.min(1, (max || 1500) / Math.max(v.videoWidth, v.videoHeight));
+  const c = document.createElement('canvas');
+  c.width = Math.round(v.videoWidth * sc); c.height = Math.round(v.videoHeight * sc);
+  c.getContext('2d').drawImage(v, 0, 0, c.width, c.height);
+  return c.toDataURL('image/jpeg', 0.85).split(',')[1];
+}
+
+const SHARP_FLOOR = 2.2;        // anything below this is a black or hopeless frame
+const COOLDOWN    = 2600;       // ms between reads, so a live feed cannot run away with cost
+const MAX_TRIES   = 5;          // per step, then it asks for a manual shot
+const PATIENCE    = 7000;       // if nothing has looked good for this long, read anyway
+
+// The gate is relative, not absolute: what counts as "sharp" depends on the
+// camera, the record and the light, so it learns the best it has seen on this
+// step and fires near it. A fixed threshold set blind would either fire on mush
+// or — worse — sit there doing nothing at all.
+function gateOpen(now) {
+  if (L.sharp < SHARP_FLOOR) return false;
+  L.best = Math.max(L.best || 0, L.sharp);
+  if (now - (L.stepStart || now) > PATIENCE) return true;   // never just sit there
+  return L.sharp >= Math.max(SHARP_FLOOR, L.best * 0.8);
+}
+
+function loop() {
+  clearInterval(L.timer);
+  L.timer = setInterval(tick, 250);   // an interval, not rAF: rAF stops in a
+  tick();                             // background tab and the scanner would stall
+}
+
+function tick() {
+  const v = L.video || $('#feed');
+  if (!v || !v.videoWidth) return;
+  L.video = v;
+  L.sharp = sharpness(v);
+  const now = performance.now();
+  const bar = $('#sharpbar');
+  if (bar) bar.style.width = Math.min(100, L.sharp / Math.max(4, (L.best || 4)) * 100) + '%';
+  const ret = $('#ret'); if (ret) ret.classList.toggle('on', gateOpen(now));
+  if (L.reading || L.step >= STEPS.length || L.samples >= MAX_TRIES) return;
+  if (now - L.lastSample < COOLDOWN) return;
+  if (!gateOpen(now)) return;
+  L.lastSample = now; readStep();
+}
+
+async function readStep() {
+  const step = STEPS[L.step]; if (!step) return;
+  const b = grabFrame(); if (!b) return;
+  L.reading = true; L.samples++; L.msg = ''; render();
+  try {
+    const a = await ask([img(b), { type: 'text', text: PROMPTS[step.key] }]);
+    if (a.usable) {
+      L.frames[step.key] = b;
+      if (step.key === 'front')  { L.checks.front  = [a.artist, a.title].filter(Boolean).join(' — ') || 'cover captured'; }
+      if (step.key === 'back')   { L.checks.back   = a.country ? 'made in ' + a.country : 'back captured';
+                                   if (a.catno || a.barcode) L.checks.catno = a.catno || ('barcode ' + a.barcode); }
+      if (step.key === 'runout') { L.checks.runout = a.reading || 'runout captured'; }
+      S.read = Object.assign({}, S.read, {
+        artist: a.artist || (S.read||{}).artist, title: a.title || (S.read||{}).title,
+        catno: a.catno || (S.read||{}).catno, barcode: a.barcode || (S.read||{}).barcode,
+        country: a.country || (S.read||{}).country
+      });
+      if (step.key === 'runout') S.shots = [b];
+      L.step++; L.samples = 0; L.msg = ''; L.best = 0; L.stepStart = performance.now();
+      if (L.step >= STEPS.length) return finishLive();
+      // the album can be looked up while the user turns the record over
+      if (step.key === 'back') prefetchAlbum();
+    } else {
+      L.msg = a.why || 'Not readable yet — move a little.';
+    }
+  } catch (e) {
+    L.msg = e.message; L.samples = MAX_TRIES;      // stop burning reads on a broken key
+  }
+  L.reading = false; render();
+}
+
+const PROMPTS = {
+  front:
+`This is a live camera frame that should show the FRONT of a record sleeve.
+Decide only whether it is good enough to use: in frame, in focus, not badly glared.
+If it is, name the album if you recognise the artwork.
+JSON only: {"usable":<bool>,"artist":null,"title":null,"why":"if not usable, what to change in under 10 words"}`,
+  back:
+`This is a live camera frame that should show the BACK of a record sleeve.
+Read only what is genuinely legible: catalogue number (a short code like "SHVL 804", not the barcode), barcode digits, country of manufacture ("Made in England" means UK), artist, title.
+Set usable true only if you got a catalogue number OR a barcode.
+JSON only: {"usable":<bool>,"catno":null,"barcode":null,"country":null,"artist":null,"title":null,"why":"if not usable, what to change in under 10 words"}`,
+  runout:
+`This is a live camera frame that should show the RUNOUT MATRIX — the code stamped or etched into the smooth dead wax between the last groove and the label of a vinyl record.
+Set usable true ONLY if you can read actual characters. Transcribe exactly what you see, using ? for characters you cannot make out. Do not guess and do not complete it from memory.
+JSON only: {"usable":<bool>,"reading":"the characters, or empty","why":"if not usable, what to change in under 10 words — e.g. lower the light angle"}`
+};
+
+async function prefetchAlbum() {
+  try {
+    const r = S.read || {};
+    if (r.barcode) {
+      const digits = String(r.barcode).replace(/\D/g,'');
+      if (digits.length >= 8) {
+        const j = await dg('/database/search?per_page=20&barcode=' + encodeURIComponent(digits));
+        const hits = (j.results||[]).filter(x => x.type === 'release');
+        if (hits.length) { L.barcodeHits = hits; return; }
+      }
+    }
+    const q = [r.artist, r.title].filter(Boolean).join(' ');
+    if (!q) return;
+    const j = await dg('/database/search?type=master&per_page=6&q=' + encodeURIComponent(q));
+    L.masters = (j.results||[]).map(x => ({ id:x.id, title:x.title, year:x.year, thumb:x.thumb, country:x.country }));
+  } catch (e) {}
+}
+
+async function finishLive() {
+  L.msg = 'Everything captured.'; render();
+  stopLive();
+  if (L.barcodeHits) return fromBarcode(L.barcodeHits, S.read || {});
+  if (L.masters && L.masters.length) {
+    S.results = L.masters;
+    if (L.masters.length === 1) return pickAlbum(L.masters[0]);
+    S.screen = 'search'; S.stack = []; return render();
+  }
+  await prefetchAlbum();
+  if (L.barcodeHits) return fromBarcode(L.barcodeHits, S.read || {});
+  if (L.masters && L.masters.length) { S.results = L.masters; S.screen='search'; S.stack=[]; return render(); }
+  S.error = 'Captured everything, but could not find the album from what was readable. Type the name instead.';
+  S.screen = 'search'; S.stack = []; render();
 }
 
 /* ---- scan the sleeve to find the record ---- */
@@ -570,7 +803,7 @@ Reply with JSON only:
 <script>
 'use strict';
 /* ================= render ================= */
-const TITLES = { search:'Runout', narrow:'Narrow it down', capture:'Photograph the runout',
+const TITLES = { search:'Runout', scan:'Scanning', capture1:'Photograph the sleeve', narrow:'Narrow it down', capture:'Photograph the runout',
                  result:'Identify', condition:'Condition', summary:'Ready to list', settings:'Settings' };
 
 function relCard(c, cls) {
@@ -599,11 +832,14 @@ function render() {
   if (S.screen === 'search') {
     add(`<h1>Point it at a record.</h1>`);
     add(`<p class="note">Photograph the sleeve and the app works out the album, then every pressing of it, then which one you are holding. The <b>back</b> of the sleeve gives it most to go on.</p>`);
-    const cam = el(`<label class="file" style="padding:30px 16px"><b style="font-size:17px">&#128247; Scan a sleeve</b>
-      <span>front or back — it reads the title, catalogue number and barcode</span>
-      <input type="file" accept="image/*" capture="environment"></label>`);
-    cam.querySelector('input').onchange = e => { const f = e.target.files[0]; e.target.value=''; if (f) scanSleeve(f); };
-    add(cam);
+    const live = el(`<button class="primary" style="padding:20px 16px;font-size:17px">&#128247;&nbsp; Start scanning</button>`);
+    live.onclick = startLive; add(live);
+    add(`<div class="checks">
+      <div><b></b>Sleeve front</div><div><b></b>Sleeve back</div>
+      <div><b></b>Catalogue number</div><div><b></b>Runout matrix</div></div>`);
+    add(`<p class="note">The camera stays live and ticks each one off as it gets what it needs. Four things, in that order.</p>`);
+    const one = el(`<button class="ghost">Photograph a sleeve instead</button>`);
+    one.onclick = () => go('capture1'); add(one);
     if (S.sleeveShot && S.read) {
       const r = S.read;
       add(`<div class="card tonal"><div class="eyebrow">Read from the sleeve</div>
@@ -685,6 +921,64 @@ function render() {
         s.firstElementChild.onclick = () => go('capture'); add(s);
       }
     }
+  }
+
+  /* ---- single-photo fallback ---- */
+  if (S.screen === 'capture1') {
+    add(`<h1>Photograph the sleeve</h1>`);
+    add(`<p class="note">One photo, back of the sleeve for preference. Use this if the live camera will not open.</p>`);
+    const lab = el(`<label class="file"><b>&#128247; Take a photo</b><span>front or back</span>
+      <input type="file" accept="image/*" capture="environment"></label>`);
+    lab.querySelector('input').onchange = e => { const f = e.target.files[0]; e.target.value=''; if (f) scanSleeve(f); };
+    add(lab);
+  }
+
+  /* ---- live scan ---- */
+  if (S.screen === 'scan') {
+    const step = STEPS[L.step] || STEPS[STEPS.length - 1];
+    const vp = el(`<div class="viewport">
+      <video id="feed" playsinline autoplay muted></video>
+      <div class="vp-overlay">
+        <div id="ret" class="reticle ${step.shape}"></div>
+        <div class="vp-top">
+          <span class="vp-step">${esc(step.label)}</span>
+          <span class="vp-live"><i></i>${L.reading ? 'reading' : 'live'}</span>
+        </div>
+        ${L.reading ? `<div class="vp-busy"><span class="spin"></span> reading the frame…</div>` : ''}
+        <div class="vp-hint">${esc(L.msg || step.hint)}</div>
+      </div></div>`);
+    add(vp);
+    const v = vp.querySelector('#feed');
+    if (L.stream) { v.srcObject = L.stream; v.play().catch(()=>{}); L.video = v; }
+
+    add(`<div class="meter"><i id="sharpbar" style="width:0%"></i></div>`);
+    add(`<p class="note" style="margin-top:-4px">Focus. It reads a frame by itself once the picture is sharp enough — it will not waste a read on a blurred one.</p>`);
+
+    const rowsHtml = [
+      ['front',  'Sleeve front'],
+      ['back',   'Sleeve back'],
+      ['catno',  'Catalogue number'],
+      ['runout', 'Runout matrix']
+    ].map(([k, lbl]) => {
+      const done = !!L.checks[k];
+      const now  = !done && ((step.key === k) || (step.key === 'back' && k === 'catno'));
+      return `<div class="${done ? 'done' : now ? 'now' : ''}"><b>${done ? '✓' : now ? '•' : ''}</b>${lbl}
+        ${done ? `<span>${esc(String(L.checks[k]).slice(0, 46))}</span>` : now ? `<span>looking…</span>` : ''}</div>`;
+    }).join('');
+    add(`<div class="checks">${rowsHtml}</div>`);
+
+    const ctl = el(`<div class="row" style="align-items:center">
+      <button class="ghost" id="torch">${L.torch ? 'Torch off' : 'Torch on'}</button>
+      <button class="ghost" id="manual">Read now</button>
+      <button class="ghost" id="skip">Skip this</button></div>`);
+    add(ctl);
+    $('#torch').onclick = toggleTorch;
+    $('#manual').onclick = () => { if (!L.reading) { L.lastSample = performance.now(); L.samples = 0; readStep(); } };
+    $('#skip').onclick = () => { L.step++; L.samples = 0; L.msg = ''; L.best = 0; L.stepStart = performance.now();
+      if (L.step >= STEPS.length) finishLive(); else render(); };
+    if (L.samples >= MAX_TRIES) add(`<div class="banner warn">Five tries on this one without a clean read. Move the light, or tap <b>Skip this</b> and carry on — the runout is the only one that really matters.</div>`);
+    add(`<button class="ghost" id="stopcam">Stop the camera</button>`);
+    $('#stopcam').onclick = () => { stopLive(); S.screen = 'search'; S.stack = []; render(); };
   }
 
   /* ---- capture ---- */
